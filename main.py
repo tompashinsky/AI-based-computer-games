@@ -5,7 +5,7 @@ import sys
 pygame.init()
 
 # Constants
-WIDTH, HEIGHT = 600, 600
+WIDTH, HEIGHT = 800, 800
 LINE_WIDTH = 15
 BOARD_ROWS, BOARD_COLS = 3, 3
 SQUARE_SIZE = WIDTH // BOARD_COLS
@@ -59,27 +59,34 @@ def check_win(player):
     # Check rows
     for row in range(BOARD_ROWS):
         if all([board[row][col] == player for col in range(BOARD_COLS)]):
-            display_winner_message(player)
             return True
     # Check columns
     for col in range(BOARD_COLS):
         if all([board[row][col] == player for row in range(BOARD_ROWS)]):
-            display_winner_message(player)
             return True
     # Check diagonals
     if all([board[i][i] == player for i in range(BOARD_ROWS)]) or all([board[i][BOARD_ROWS - i - 1] == player for i in range(BOARD_ROWS)]):
-        display_winner_message(player)
+        
         return True
     return False
 # Display winner message
-def display_winner_message(player):
+def display_winner_message(player, result):
     # Draw a grey background
     background_rect = pygame.Rect(0, HEIGHT // 3, WIDTH, HEIGHT // 3)
     pygame.draw.rect(screen, (200, 200, 200), background_rect)
 
+    msg = ""
+    if player == 1:
+        msg = "X"
+    else:
+        msg = "O"
+
     # Display the winner message
     font = pygame.font.Font(None, 74)  # Create a font object
-    text = font.render(f"Player {player} wins!", True, RED)  # Render the winner message
+    if result == 0:
+        text = font.render("It's a draw!", True, RED)  # Render the draw message
+    else:
+        text = font.render(f"Player {msg} wins!", True, RED)  # Render the winner message
     text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))  # Center the text above the button
     screen.blit(text, text_rect)  # Draw the text on the screen
 
@@ -105,6 +112,21 @@ def display_winner_message(player):
                 if button_rect.collidepoint(mouseX, mouseY):  # Check if the button is clicked
                     restart_game()
                     return  # Exit the function and return control to the main game loop
+            
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    # Clear the winner message by redrawing the board
+                    screen.fill(WHITE)  # Clear the screen
+                    draw_lines()  # Redraw the grid lines
+                    for row in range(BOARD_ROWS):  # Redraw the current board state
+                        for col in range(BOARD_COLS):
+                            if board[row][col] == 1:
+                                draw_x(row, col)
+                            elif board[row][col] == 2:
+                                draw_o(row, col)
+                    pygame.display.update()  # Update the display
+                    return
+                    return
 
 # Check if board is full
 def is_board_full():
@@ -112,15 +134,21 @@ def is_board_full():
 
 # Restart game
 def restart_game():
+    global game_over
+    global player
     screen.fill(WHITE)
     draw_lines()
     for row in range(BOARD_ROWS):
         for col in range(BOARD_COLS):
             board[row][col] = 0
+    player = 1
+    game_over = False
     return
 
 # Main loop
 draw_lines()
+global player
+global game_over
 player = 1
 game_over = False
 
@@ -143,15 +171,17 @@ while True:
 
                 if check_win(player):
                     game_over = True
+                    display_winner_message(player , 1)
                 elif is_board_full():
                     game_over = True
+                    display_winner_message(player , 0)
                 else:
                     player = 3 - player  # Switch player
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
                 restart_game()
-                player = 1
-                game_over = False
+                #player = 1
+                #game_over = False
 
     pygame.display.update()
