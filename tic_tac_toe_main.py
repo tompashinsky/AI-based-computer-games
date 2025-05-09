@@ -1,6 +1,7 @@
 import pygame
 import sys
 import pygame.gfxdraw  # Import gfxdraw for anti-aliasing
+from mcts import MCTS  # Import the MCTS AI
 
 # Initialize pygame
 pygame.init()
@@ -22,6 +23,10 @@ RED = (255, 0, 0)
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Tic Tac Toe")
 screen.fill(WHITE)
+
+# Initialize MCTS AI
+ai = MCTS(iterations=1000)
+ai.load_knowledge()  # Load the trained model
 
 # Board
 board = [[0] * BOARD_COLS for _ in range(BOARD_ROWS)]
@@ -192,7 +197,7 @@ def restart_game():
 draw_lines()
 global player
 global game_over
-player = 1
+player = 1  # Human player is X (1)
 game_over = False
 global player_x_score
 global player_o_score
@@ -203,35 +208,51 @@ display_scores()  # Display initial scores
 while True:
     display_turn(player)  # Display the current player's turn
     display_scores()  # Display scores
+    
+    # AI's turn (player 2)
+    if player == 2 and not game_over:
+        # Get AI move
+        ai_move = ai.get_best_move(board)
+        row, col = ai_move
+        
+        # Make the move
+        mark_square(row, col, player)
+        draw_o(row, col)
+        
+        # Check for win or draw
+        if check_win(player):
+            game_over = True
+            display_winner_message(player, 1)
+        elif is_board_full():
+            game_over = True
+            display_winner_message(player, 0)
+        else:
+            player = 3 - player  # Switch to human player
+    
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
             sys.exit()
-        if event.type == pygame.MOUSEBUTTONDOWN and not game_over:
+        if event.type == pygame.MOUSEBUTTONDOWN and not game_over and player == 1:  # Only human player can click
             mouseX, mouseY = event.pos
             clicked_row = (mouseY - 50) // SQUARE_SIZE
             clicked_col = mouseX // SQUARE_SIZE
 
             if 50 <= mouseY <= HEIGHT and is_square_available(clicked_row, clicked_col):
                 mark_square(clicked_row, clicked_col, player)
-                if player == 1:
-                    draw_x(clicked_row, clicked_col)
-                else:
-                    draw_o(clicked_row, clicked_col)
+                draw_x(clicked_row, clicked_col)
 
                 if check_win(player):
                     game_over = True
-                    display_winner_message(player , 1)
+                    display_winner_message(player, 1)
                 elif is_board_full():
                     game_over = True
-                    display_winner_message(player , 0)
+                    display_winner_message(player, 0)
                 else:
-                    player = 3 - player  # Switch player
+                    player = 3 - player  # Switch to AI player
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
                 restart_game()
-                #player = 1
-                #game_over = False
 
     pygame.display.update()
