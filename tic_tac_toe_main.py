@@ -112,8 +112,10 @@ def display_winner_message(player, result):
             player_x_score += 1
         else:
             player_o_score += 1
-
     
+    # Record the game result for AI learning
+    if player == 2:  # If AI was playing
+        ai.record_game_result(1 if result == 1 else 0)
     
     # Draw a grey background
     background_rect = pygame.Rect(0, HEIGHT // 3, WIDTH, HEIGHT // 3)

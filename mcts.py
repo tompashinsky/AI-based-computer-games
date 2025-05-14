@@ -12,6 +12,7 @@ class Node:
         self.children = []  # Child nodes
         self.visits = 0  # Number of times this node has been visited
         self.wins = 0  # Number of wins from this node
+        self.losses = 0  # Number of losses from this node
         self.untried_moves = self.get_available_moves()  # Moves not yet tried
 
     def get_available_moves(self):
@@ -25,7 +26,9 @@ class Node:
     def ucb1(self, exploration=1.41):
         if self.visits == 0:
             return float('inf')
-        return (self.wins / self.visits) + exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
+        # Modified UCB1 to consider losses
+        win_rate = (self.wins - self.losses) / self.visits
+        return win_rate + exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
 
     def select_child(self):
         return max(self.children, key=lambda c: c.ucb1())
@@ -38,12 +41,14 @@ class Node:
         self.children.append(child)
         return child
 
-    def update(self, result):
+    def update(self, result, is_loss=False):
         self.visits += 1
-        self.wins += result
+        if is_loss:
+            self.losses += 1
+        else:
+            self.wins += result
 
     def get_state_key(self):
-        # Convert board state to a tuple of tuples for hashing
         return tuple(tuple(row) for row in self.state)
 
 class MCTS:
@@ -51,6 +56,8 @@ class MCTS:
         self.iterations = iterations
         self.knowledge_base = {}  # Dictionary to store learned knowledge
         self.model_path = "tictactoe_model.pkl"
+        self.last_game_moves = []  # Track moves from the last game
+        self.last_game_result = None  # Track the result of the last game
 
     def load_knowledge(self):
         """Load the trained model if it exists"""
@@ -65,6 +72,23 @@ class MCTS:
             pickle.dump(self.knowledge_base, f)
         print(f"Saved knowledge base with {len(self.knowledge_base)} states")
 
+    def record_move(self, state, move):
+        """Record a move made during the game"""
+        self.last_game_moves.append((state, move))
+
+    def learn_from_loss(self):
+        """Learn from the last game if it was a loss"""
+        if self.last_game_result == 0:  # If the last game was a loss
+            # Penalize the moves that led to the loss
+            for state, move in self.last_game_moves:
+                state_key = tuple(tuple(row) for row in state)
+                if state_key in self.knowledge_base:
+                    # Increase the loss count for these states
+                    self.knowledge_base[state_key]['losses'] = self.knowledge_base[state_key].get('losses', 0) + 1
+                    # Decrease the win rate to make these moves less likely to be chosen
+                    self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 1)
+            self.save_knowledge()
+
     def get_best_move(self, board):
         root = Node(board)
         state_key = root.get_state_key()
@@ -73,6 +97,7 @@ class MCTS:
         if state_key in self.knowledge_base:
             root.visits = self.knowledge_base[state_key]['visits']
             root.wins = self.knowledge_base[state_key]['wins']
+            root.losses = self.knowledge_base[state_key].get('losses', 0)
         
         for _ in range(self.iterations):
             node = root
@@ -96,11 +121,15 @@ class MCTS:
         # Update knowledge base with root node's statistics
         self.knowledge_base[state_key] = {
             'visits': root.visits,
-            'wins': root.wins
+            'wins': root.wins,
+            'losses': root.losses
         }
         
-        # Return the move with the most visits
-        return max(root.children, key=lambda c: c.visits).move
+        # Record this move for learning from losses
+        best_move = max(root.children, key=lambda c: c.visits).move
+        self.record_move(board, best_move)
+        
+        return best_move
 
     def simulate_random_play(self, board):
         temp_board = copy.deepcopy(board)
@@ -143,4 +172,11 @@ class MCTS:
         if all(board[i][2-i] == player for i in range(3)):
             return True
         
-        return False 
+        return False
+
+    def record_game_result(self, result):
+        """Record the result of the last game"""
+        self.last_game_result = result
+        if result == 0:  # If it was a loss
+            self.learn_from_loss()
+        self.last_game_moves = []  # Reset moves for next game 
