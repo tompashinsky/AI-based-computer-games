@@ -60,7 +60,7 @@ def player_choice_screen():
                 elif o_button.collidepoint(mouseX, mouseY):
                     return 2
 
-def draw_lines():
+def draw_lines(): # Creating the board
     for row in range(1, BOARD_ROWS):
         pygame.draw.line(screen, BLACK, (130, row * SQUARE_SIZE + 100), (680, row * SQUARE_SIZE + 100), LINE_WIDTH)
     for col in range(1, BOARD_COLS):

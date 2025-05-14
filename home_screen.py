@@ -52,6 +52,7 @@ def main_menu():
         mainClock.tick(60)
 
 
+# The game_controller function helps to navigate between the games and the main screen
 def game_controller():
     current_screen = "menu"
     while True:
