@@ -20,7 +20,7 @@ def draw_text(text, font, color, surface, x, y):
 def main_menu():
     is_clicked = False
     while True:
-        screen.fill((0, 190, 255))
+        screen.fill((0, 220, 250))
         draw_text('Welcome to NTGames!', header_font, (0, 0, 0), screen, 140, 140)
 
         mx, my = pygame.mouse.get_pos()
@@ -32,9 +32,9 @@ def main_menu():
         if button_1.collidepoint((mx, my)) and is_clicked:
             return "tic_tac_toe"
 
-        pygame.draw.rect(screen, (255, 0, 0), button_1)
-        pygame.draw.rect(screen, (255, 0, 0), button_2)
-        pygame.draw.rect(screen, (255, 0, 0), button_3)
+        pygame.draw.rect(screen, (255, 0, 0), button_1, border_radius=10)
+        pygame.draw.rect(screen, (255, 0, 0), button_2, border_radius=10)
+        pygame.draw.rect(screen, (255, 0, 0), button_3, border_radius=10)
 
         draw_text('Tic Tac Toe', font, (255, 255, 255), screen, 197, 377)
         draw_text('Checkers', font, (255, 255, 255), screen, 525, 377)
