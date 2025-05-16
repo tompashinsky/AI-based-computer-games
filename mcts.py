@@ -16,26 +16,114 @@ class Node:
         self.untried_moves = self.get_available_moves()  # Moves not yet tried
 
     def get_available_moves(self):
+        """Get available moves, prioritized by domain knowledge"""
         moves = []
         for i in range(3):
             for j in range(3):
                 if self.state[i][j] == 0:
                     moves.append((i, j))
-        return moves
+        
+        # Sort moves based on domain knowledge
+        return self.prioritize_moves(moves)
+
+    def prioritize_moves(self, moves):
+        """Prioritize moves based on Tic Tac Toe strategy"""
+        if not moves:
+            return moves
+
+        current_player = 2 if sum(row.count(1) for row in self.state) > sum(row.count(2) for row in self.state) else 1
+        prioritized_moves = []
+        
+        # Check for winning moves
+        winning_moves = self.find_winning_moves(current_player, moves)
+        if winning_moves:
+            return winning_moves
+
+        # Check for blocking opponent's winning moves
+        opponent = 3 - current_player
+        blocking_moves = self.find_winning_moves(opponent, moves)
+        if blocking_moves:
+            return blocking_moves
+
+        # Prioritize center if available
+        if (1, 1) in moves:
+            prioritized_moves.append((1, 1))
+            moves.remove((1, 1))
+
+        # Prioritize corners
+        corners = [(0, 0), (0, 2), (2, 0), (2, 2)]
+        for corner in corners:
+            if corner in moves:
+                prioritized_moves.append(corner)
+                moves.remove(corner)
+
+        # Add remaining moves
+        prioritized_moves.extend(moves)
+        return prioritized_moves
+
+    def find_winning_moves(self, player, available_moves):
+        """Find moves that would result in an immediate win"""
+        winning_moves = []
+        for move in available_moves:
+            # Try the move
+            temp_state = copy.deepcopy(self.state)
+            temp_state[move[0]][move[1]] = player
+            
+            # Check if it's a winning move
+            if self.check_win(temp_state, player):
+                winning_moves.append(move)
+        
+        return winning_moves
+
+    def check_win(self, board, player):
+        # Check rows and columns
+        for i in range(3):
+            if all(board[i][j] == player for j in range(3)) or \
+               all(board[j][i] == player for j in range(3)):
+                return True
+        
+        # Check diagonals
+        if all(board[i][i] == player for i in range(3)) or \
+           all(board[i][2-i] == player for i in range(3)):
+            return True
+        
+        return False
 
     def ucb1(self, exploration=1.41):
         if self.visits == 0:
             return float('inf')
-        # Modified UCB1 to consider losses
+        
+        # Modified UCB1 with domain knowledge weight
         win_rate = (self.wins - self.losses) / self.visits
-        return win_rate + exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
+        exploration_term = exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
+        
+        # Add domain knowledge bonus
+        position_weight = self.get_position_weight(self.move) if self.move else 0
+        
+        return win_rate + exploration_term + 0.1 * position_weight
+
+    def get_position_weight(self, move):
+        """Calculate position weight based on strategic value"""
+        if not move:
+            return 0
+            
+        # Center position has highest weight
+        if move == (1, 1):
+            return 1.0
+            
+        # Corners have second highest weight
+        if move in [(0, 0), (0, 2), (2, 0), (2, 2)]:
+            return 0.8
+            
+        # Edges have lowest weight
+        return 0.4
 
     def select_child(self):
         return max(self.children, key=lambda c: c.ucb1())
 
     def add_child(self, move):
         child_state = copy.deepcopy(self.state)
-        child_state[move[0]][move[1]] = 2 if self.state[move[0]][move[1]] == 1 else 1
+        child_state[move[0]][move[1]] = 2 if sum(row.count(1) for row in self.state) > sum(row.count(2) for row in self.state) else 1
         child = Node(child_state, self, move)
         self.untried_moves.remove(move)
         self.children.append(child)
@@ -132,8 +220,9 @@ class MCTS:
         return best_move
 
     def simulate_random_play(self, board):
+        """Simulate a game with smart playout strategy"""
         temp_board = copy.deepcopy(board)
-        current_player = 2 if any(1 in row for row in board) else 1
+        current_player = 2 if sum(row.count(1) for row in board) > sum(row.count(2) for row in board) else 1
         
         while True:
             # Check for win
@@ -146,30 +235,42 @@ class MCTS:
             if all(all(cell != 0 for cell in row) for row in temp_board):
                 return 0.5
             
-            # Make random move
-            available_moves = [(i, j) for i in range(3) for j in range(3) if temp_board[i][j] == 0]
+            # Create a temporary node to use its move prioritization
+            temp_node = Node(temp_board)
+            available_moves = temp_node.get_available_moves()
+            
             if not available_moves:
                 return 0.5
             
-            move = random.choice(available_moves)
+            # Use weighted random choice based on move priority
+            weights = []
+            for move in available_moves:
+                if move == (1, 1):  # Center
+                    weights.append(0.4)
+                elif move in [(0, 0), (0, 2), (2, 0), (2, 2)]:  # Corners
+                    weights.append(0.3)
+                else:  # Edges
+                    weights.append(0.2)
+            
+            # Normalize weights
+            total_weight = sum(weights)
+            weights = [w/total_weight for w in weights]
+            
+            # Make weighted random move
+            move = random.choices(available_moves, weights=weights, k=1)[0]
             temp_board[move[0]][move[1]] = current_player
             current_player = 3 - current_player
 
     def check_win(self, board, player):
-        # Check rows
-        for row in board:
-            if all(cell == player for cell in row):
-                return True
-        
-        # Check columns
-        for col in range(3):
-            if all(board[row][col] == player for row in range(3)):
+        # Check rows and columns
+        for i in range(3):
+            if all(board[i][j] == player for j in range(3)) or \
+               all(board[j][i] == player for j in range(3)):
                 return True
         
         # Check diagonals
-        if all(board[i][i] == player for i in range(3)):
-            return True
-        if all(board[i][2-i] == player for i in range(3)):
+        if all(board[i][i] == player for i in range(3)) or \
+           all(board[i][2-i] == player for i in range(3)):
             return True
         
         return False
