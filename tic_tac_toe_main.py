@@ -25,7 +25,7 @@ pygame.display.set_caption("Tic Tac Toe")
 screen.fill(WHITE)
 
 # Initialize MCTS AI
-ai = MCTS(iterations=1000)
+ai = MCTS(iterations=1500)
 ai.load_knowledge()  # Load the trained model
 
 # Board

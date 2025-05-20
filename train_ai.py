@@ -79,4 +79,4 @@ def train_ai(num_games=1000):
     print(f"Final knowledge base size: {len(ai.knowledge_base)} states")
 
 if __name__ == "__main__":
-    train_ai(num_games=1000)  # Train for 1000 games 
+    train_ai(num_games=2000)  # Train for 1000 games 

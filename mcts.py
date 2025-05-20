@@ -89,6 +89,22 @@ class Node:
         
         return False
 
+    def get_position_weight(self, move):
+        """Calculate position weight based on strategic value"""
+        if not move:
+            return 0
+            
+        # Center position has highest weight
+        if move == (1, 1):
+            return 3.0  # Significantly increased from 2.0
+            
+        # Corners have second highest weight
+        if move in [(0, 0), (0, 2), (2, 0), (2, 2)]:
+            return 1.5  # Increased from 0.8
+            
+        # Edges have lowest weight
+        return 0.5  # Increased from 0.4
+
     def ucb1(self, exploration=1.41):
         if self.visits == 0:
             return float('inf')
@@ -97,26 +113,10 @@ class Node:
         win_rate = (self.wins - self.losses) / self.visits
         exploration_term = exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
         
-        # Add domain knowledge bonus
+        # Add domain knowledge bonus with increased weight
         position_weight = self.get_position_weight(self.move) if self.move else 0
         
-        return win_rate + exploration_term + 0.1 * position_weight
-
-    def get_position_weight(self, move):
-        """Calculate position weight based on strategic value"""
-        if not move:
-            return 0
-            
-        # Center position has highest weight
-        if move == (1, 1):
-            return 1.0
-            
-        # Corners have second highest weight
-        if move in [(0, 0), (0, 2), (2, 0), (2, 2)]:
-            return 0.8
-            
-        # Edges have lowest weight
-        return 0.4
+        return win_rate + exploration_term + 0.8 * position_weight  # Increased from 0.5 to 0.8
 
     def select_child(self):
         return max(self.children, key=lambda c: c.ucb1())
@@ -175,6 +175,14 @@ class MCTS:
                     self.knowledge_base[state_key]['losses'] = self.knowledge_base[state_key].get('losses', 0) + 1
                     # Decrease the win rate to make these moves less likely to be chosen
                     self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 1)
+                    
+                    # Extra penalty for not playing center when available
+                    if move != (1, 1) and state[1][1] == 0:
+                        self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 1.0)
+                    
+                    # Extra penalty for not playing corners when center is taken
+                    if move not in [(0, 0), (0, 2), (2, 0), (2, 2)] and state[1][1] == 1:
+                        self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 0.5)
             self.save_knowledge()
 
     def get_best_move(self, board):
@@ -246,11 +254,11 @@ class MCTS:
             weights = []
             for move in available_moves:
                 if move == (1, 1):  # Center
-                    weights.append(0.4)
+                    weights.append(0.6)  # Increased from 0.5
                 elif move in [(0, 0), (0, 2), (2, 0), (2, 2)]:  # Corners
                     weights.append(0.3)
                 else:  # Edges
-                    weights.append(0.2)
+                    weights.append(0.1)  # Decreased from 0.2
             
             # Normalize weights
             total_weight = sum(weights)
@@ -280,4 +288,20 @@ class MCTS:
         self.last_game_result = result
         if result == 0:  # If it was a loss
             self.learn_from_loss()
-        self.last_game_moves = []  # Reset moves for next game 
+        elif result == 0.5:  # If it was a draw
+            self.learn_from_draw()
+        self.last_game_moves = []  # Reset moves for next game
+
+    def learn_from_draw(self):
+        """Learn from a drawn game"""
+        if self.last_game_result == 0.5:  # If the last game was a draw
+            # Update knowledge base with neutral feedback
+            for state, move in self.last_game_moves:
+                state_key = tuple(tuple(row) for row in state)
+                if state_key in self.knowledge_base:
+                    # Increase visits but don't change win/loss ratio
+                    self.knowledge_base[state_key]['visits'] += 1
+                    # Slightly increase wins to encourage these moves
+                    # (since they led to a draw rather than a loss)
+                    self.knowledge_base[state_key]['wins'] += 0.5
+            self.save_knowledge() 
