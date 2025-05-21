@@ -143,7 +143,7 @@ class MCTS:
     def __init__(self, iterations=1000):
         self.iterations = iterations
         self.knowledge_base = {}  # Dictionary to store learned knowledge
-        self.model_path = "AI-based-computer-games/tictactoe_model.pkl"
+        self.model_path = "tictactoe_model.pkl"
         self.last_game_moves = []  # Track moves from the last game
         self.last_game_result = None  # Track the result of the last game
 
