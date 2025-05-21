@@ -1,5 +1,10 @@
 import pygame
 import sys
+import pygame.gfxdraw
+from mcts import MCTS
+
+# Initialize pygame
+pygame.init()
 
 # Constants
 WIDTH, HEIGHT = 800, 850
@@ -13,17 +18,21 @@ SPACE = SQUARE_SIZE // 4
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED = (255, 0, 0)
+LIGHT_BLUE = (0, 220, 250)
 
 # Initialize screen
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Tic Tac Toe")
 screen.fill(WHITE)
 
+# Initialize MCTS AI
+ai = MCTS(iterations=1500)
+ai.load_knowledge()
+
 # Board and scores
 board = [[0] * BOARD_COLS for _ in range(BOARD_ROWS)]
 player_x_score = 0
 player_o_score = 0
-
 
 def player_choice_screen():
     screen.fill(WHITE)
@@ -56,11 +65,11 @@ def player_choice_screen():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mouseX, mouseY = event.pos
                 if x_button.collidepoint(mouseX, mouseY):
-                    return 1
+                    return 1  # Human plays X
                 elif o_button.collidepoint(mouseX, mouseY):
-                    return 2
+                    return 2  # Human plays O
 
-def draw_lines(): # Creating the board
+def draw_lines():
     for row in range(1, BOARD_ROWS):
         pygame.draw.line(screen, BLACK, (130, row * SQUARE_SIZE + 100), (680, row * SQUARE_SIZE + 100), LINE_WIDTH)
     for col in range(1, BOARD_COLS):
@@ -91,24 +100,18 @@ def check_win(player):
     for col in range(BOARD_COLS):
         if all([board[row][col] == player for row in range(BOARD_ROWS)]):
             return True
-    if all([board[i][i] == player for i in range(BOARD_ROWS)]) or all([
-        board[i][BOARD_ROWS - i - 1] == player for i in range(BOARD_ROWS)]):
+    if all([board[i][i] == player for i in range(BOARD_ROWS)]) or all([board[i][BOARD_ROWS - i - 1] == player for i in range(BOARD_ROWS)]):
         return True
     return False
 
-def display_turn(player):
-    # Define rectangle position and size
+def display_turn(player, human_symbol):
     turn_rect = pygame.Rect(30, 35, 270, 60)
-
-    # Draw background rectangle
-    pygame.draw.rect(screen, (0, 175, 0), turn_rect, border_radius=10)  # black background with rounded corners
-
-    # Prepare and render text
+    pygame.draw.rect(screen, (0, 175, 0), turn_rect, border_radius=10)
     font = pygame.font.Font(None, 40)
-    text = font.render(f"Current Player:  {'X' if player == 1 else 'O'}", True, WHITE)
+    current_player = "Human" if player == 1 else "AI"
+    symbol = "X" if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2) else "O"
+    text = font.render(f"{current_player}'s Turn ({symbol})", True, WHITE)
     text_rect = text.get_rect(center=turn_rect.center)
-
-    # Draw text
     screen.blit(text, text_rect)
 
 def display_scores():
@@ -116,38 +119,34 @@ def display_scores():
     font = pygame.font.Font(None, 40)
     line1 = "Total score"
     line2 = f"Player X : {player_x_score}  |  Player O : {player_o_score}"
-
-    # Render both lines separately
     text1 = font.render(line1, True, BLACK)
     text2 = font.render(line2, True, BLACK)
-
-    # Calculate positions
     text1_rect = text1.get_rect(center=(WIDTH // 2, HEIGHT - 100))
     text2_rect = text2.get_rect(center=(WIDTH // 2, HEIGHT - 60))
-
-    # Clear the background area before drawing the scores
     pygame.draw.rect(screen, WHITE, (0, HEIGHT - 120, WIDTH, 80))
-
-    # Draw the lines
     screen.blit(text1, text1_rect)
     screen.blit(text2, text2_rect)
 
-def display_winner_message(player, result):
+def display_winner_message(player, result, human_symbol):
     global player_x_score, player_o_score
     if result == 1:
-        if player == 1:
+        if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2):
             player_x_score += 1
         else:
             player_o_score += 1
+    
+    # Record the game result for AI learning
+    if player == 2:  # If AI was playing
+        ai.record_game_result(1 if result == 1 else 0)
 
     pygame.draw.rect(screen, (200, 200, 200), pygame.Rect(0, HEIGHT // 3, WIDTH, HEIGHT // 3))
-
     font = pygame.font.Font(None, 74)
     if result == 0:
         text = font.render("It's a draw!", True, RED)
     else:
-        msg = "X" if player == 1 else "O"
-        text = font.render(f"Player {msg} wins!", True, RED)
+        winner = "Human" if player == 1 else "AI"
+        symbol = "X" if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2) else "O"
+        text = font.render(f"{winner} ({symbol}) wins!", True, RED)
     screen.blit(text, text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
 
     button_font = pygame.font.Font(None, 50)
@@ -177,21 +176,20 @@ def display_winner_message(player, result):
                     restart_game()
                     return
                 elif quit_rect.collidepoint(mouseX, mouseY):
-                    return "back_to_menu"
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                return
+                    pygame.quit()
+                    sys.exit()
 
 def is_board_full():
     return all([board[row][col] != 0 for row in range(BOARD_ROWS) for col in range(BOARD_COLS)])
 
 def restart_game():
-    global game_over, player
-    screen.fill(WHITE)
+    global game_over, player, human_symbol
+    screen.fill(LIGHT_BLUE)
     draw_lines()
     for row in range(BOARD_ROWS):
         for col in range(BOARD_COLS):
             board[row][col] = 0
-    player = 1
+    player = 1 if human_symbol == 1 else 2  # If human chose X, they start; if O, AI starts
     game_over = False
 
 def draw_back_arrow():
@@ -220,33 +218,61 @@ def draw_back_arrow():
     return pygame.Rect(arrow_x, arrow_y, arrow_width, arrow_height)
 
 def run_tic_tac_toe():
-    global player, game_over, player_x_score, player_o_score
+    global player, game_over, player_x_score, player_o_score, human_symbol
 
-    player_symbol = player_choice_screen()
-    opponent_symbol = 3 - player_symbol
+    human_symbol = player_choice_screen()  # 1 for X, 2 for O
 
     screen.fill(WHITE)
     draw_lines()
-    player = player_symbol
+    # Set initial player based on symbol choice
+    player = 1 if human_symbol == 1 else 2  # If human chose X, they start; if O, AI starts
     game_over = False
     player_x_score = 0
     player_o_score = 0
     display_scores()
 
     while True:
-        screen.fill((0, 220, 250))
+        screen.fill(LIGHT_BLUE)
         draw_lines()
 
+        # Draw the board state with correct symbols
         for row in range(BOARD_ROWS):
             for col in range(BOARD_COLS):
-                if board[row][col] == 1:
-                    draw_x(row, col)
-                elif board[row][col] == 2:
-                    draw_o(row, col)
+                if board[row][col] == 1:  # Human's move
+                    if human_symbol == 1:  # Human is X
+                        draw_x(row, col)
+                    else:  # Human is O
+                        draw_o(row, col)
+                elif board[row][col] == 2:  # AI's move
+                    if human_symbol == 1:  # AI is O
+                        draw_o(row, col)
+                    else:  # AI is X
+                        draw_x(row, col)
 
-        display_turn(player)
+        display_turn(player, human_symbol)
         display_scores()
         arrow_rect = draw_back_arrow()
+
+        # AI's turn (player 2)
+        if player == 2 and not game_over:
+            ai_move = ai.get_best_move(board)
+            row, col = ai_move
+            pygame.display.update()  # Update display before delay
+            pygame.time.delay(750)  # Delay for 1 second (1000 milliseconds)
+            mark_square(row, col, player)
+            if human_symbol == 1:  # If human is X, AI is O
+                draw_o(row, col)
+            else:  # If human is O, AI is X
+                draw_x(row, col)
+
+            if check_win(player):
+                game_over = True
+                display_winner_message(player, 1, human_symbol)
+            elif is_board_full():
+                game_over = True
+                display_winner_message(player, 0, human_symbol)
+            else:
+                player = 1  # Switch to human player
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -259,33 +285,30 @@ def run_tic_tac_toe():
                     restart_game()
                     return "back_to_menu"
 
-                if not game_over:
+                if not game_over and player == 1:  # Human's turn
                     clicked_row = (mouseY - 100) // SQUARE_SIZE
                     clicked_col = (mouseX - 100) // SQUARE_SIZE
 
                     if 0 <= clicked_row < BOARD_ROWS and is_square_available(clicked_row, clicked_col):
                         mark_square(clicked_row, clicked_col, player)
-                        if player == 1:
+                        if human_symbol == 1:  # If human is X
                             draw_x(clicked_row, clicked_col)
-                        else:
+                        else:  # If human is O
                             draw_o(clicked_row, clicked_col)
 
                         if check_win(player):
                             game_over = True
-                            result = display_winner_message(player, 1)
-                            if result == "back_to_menu":
-                                restart_game()
-                                return "back_to_menu"
+                            display_winner_message(player, 1, human_symbol)
                         elif is_board_full():
                             game_over = True
-                            result = display_winner_message(player, 0)
-                            if result == "back_to_menu":
-                                restart_game()
-                                return "back_to_menu"
+                            display_winner_message(player, 0, human_symbol)
                         else:
-                            player = player_symbol if player == opponent_symbol else opponent_symbol
+                            player = 2  # Switch to AI player
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 restart_game()
 
         pygame.display.update()
+
+if __name__ == "__main__":
+    run_tic_tac_toe()

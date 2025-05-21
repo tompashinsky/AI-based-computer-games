@@ -1,6 +1,6 @@
 import pygame
 import sys
-from tic_tac_toe import run_tic_tac_toe
+from tic_tac_toe_merged import run_tic_tac_toe
 
 pygame.init()
 pygame.display.set_caption('NTGames')
