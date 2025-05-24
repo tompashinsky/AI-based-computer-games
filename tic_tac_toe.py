@@ -176,8 +176,7 @@ def display_winner_message(player, result, human_symbol):
                     restart_game()
                     return
                 elif quit_rect.collidepoint(mouseX, mouseY):
-                    pygame.quit()
-                    sys.exit()
+                    return "back_to_menu"
 
 def is_board_full():
     return all([board[row][col] != 0 for row in range(BOARD_ROWS) for col in range(BOARD_COLS)])
@@ -224,8 +223,7 @@ def run_tic_tac_toe():
 
     screen.fill(WHITE)
     draw_lines()
-    # Set initial player based on symbol choice
-    player = 1 if human_symbol == 1 else 2  # If human chose X, they start; if O, AI starts
+    player = 1 if human_symbol == 1 else 2
     game_over = False
     player_x_score = 0
     player_o_score = 0
@@ -235,44 +233,48 @@ def run_tic_tac_toe():
         screen.fill(LIGHT_BLUE)
         draw_lines()
 
-        # Draw the board state with correct symbols
         for row in range(BOARD_ROWS):
             for col in range(BOARD_COLS):
-                if board[row][col] == 1:  # Human's move
-                    if human_symbol == 1:  # Human is X
+                if board[row][col] == 1:
+                    if human_symbol == 1:
                         draw_x(row, col)
-                    else:  # Human is O
+                    else:
                         draw_o(row, col)
-                elif board[row][col] == 2:  # AI's move
-                    if human_symbol == 1:  # AI is O
+                elif board[row][col] == 2:
+                    if human_symbol == 1:
                         draw_o(row, col)
-                    else:  # AI is X
+                    else:
                         draw_x(row, col)
 
         display_turn(player, human_symbol)
         display_scores()
         arrow_rect = draw_back_arrow()
 
-        # AI's turn (player 2)
         if player == 2 and not game_over:
             ai_move = ai.get_best_move(board)
             row, col = ai_move
-            pygame.display.update()  # Update display before delay
-            pygame.time.delay(750)  # Delay for 1 second (1000 milliseconds)
+            pygame.display.update()
+            pygame.time.delay(750)
             mark_square(row, col, player)
-            if human_symbol == 1:  # If human is X, AI is O
+            if human_symbol == 1:
                 draw_o(row, col)
-            else:  # If human is O, AI is X
+            else:
                 draw_x(row, col)
 
             if check_win(player):
                 game_over = True
-                display_winner_message(player, 1, human_symbol)
+                result = display_winner_message(player, 1, human_symbol)  # <-- added
+                if result == "back_to_menu":                              # <-- added
+                    restart_game()
+                    return "back_to_menu"
             elif is_board_full():
                 game_over = True
-                display_winner_message(player, 0, human_symbol)
+                result = display_winner_message(player, 0, human_symbol)  # <-- added
+                if result == "back_to_menu":                              # <-- added
+                    restart_game()
+                    return "back_to_menu"
             else:
-                player = 1  # Switch to human player
+                player = 1
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -285,30 +287,37 @@ def run_tic_tac_toe():
                     restart_game()
                     return "back_to_menu"
 
-                if not game_over and player == 1:  # Human's turn
+                if not game_over and player == 1:
                     clicked_row = (mouseY - 100) // SQUARE_SIZE
                     clicked_col = (mouseX - 100) // SQUARE_SIZE
 
                     if 0 <= clicked_row < BOARD_ROWS and is_square_available(clicked_row, clicked_col):
                         mark_square(clicked_row, clicked_col, player)
-                        if human_symbol == 1:  # If human is X
+                        if human_symbol == 1:
                             draw_x(clicked_row, clicked_col)
-                        else:  # If human is O
+                        else:
                             draw_o(clicked_row, clicked_col)
 
                         if check_win(player):
                             game_over = True
-                            display_winner_message(player, 1, human_symbol)
+                            result = display_winner_message(player, 1, human_symbol)  # <-- added
+                            if result == "back_to_menu":                              # <-- added
+                                restart_game()
+                                return "back_to_menu"
                         elif is_board_full():
                             game_over = True
-                            display_winner_message(player, 0, human_symbol)
+                            result = display_winner_message(player, 0, human_symbol)  # <-- added
+                            if result == "back_to_menu":                              # <-- added
+                                restart_game()
+                                return "back_to_menu"
                         else:
-                            player = 2  # Switch to AI player
+                            player = 2
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 restart_game()
 
         pygame.display.update()
+
 
 if __name__ == "__main__":
     run_tic_tac_toe()
