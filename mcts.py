@@ -5,7 +5,7 @@ import pickle
 import os
 
 class Node:
-    def __init__(self, state, parent=None, move=None):
+    def __init__(self, state, parent=None, move=None, strategy=0.8):
         self.state = state  # The game state (board)
         self.parent = parent  # Parent node
         self.move = move  # The move that led to this state
@@ -14,6 +14,7 @@ class Node:
         self.wins = 0  # Number of wins from this node
         self.losses = 0  # Number of losses from this node
         self.untried_moves = self.get_available_moves()  # Moves not yet tried
+        self.strategy = strategy  # Strategy parameter for UCB1
 
     def get_available_moves(self):
         """Get available moves, prioritized by domain knowledge"""
@@ -24,7 +25,8 @@ class Node:
                     moves.append((i, j))
         
         # Sort moves based on domain knowledge
-        return self.prioritize_moves(moves)
+        #return self.prioritize_moves(moves) - Original code
+        return moves
 
     def prioritize_moves(self, moves):
         """Prioritize moves based on Tic Tac Toe strategy"""
@@ -116,7 +118,7 @@ class Node:
         # Add domain knowledge bonus with increased weight
         position_weight = self.get_position_weight(self.move) if self.move else 0
         
-        return win_rate + exploration_term + 0.8 * position_weight  # Increased from 0.5 to 0.8
+        return win_rate + exploration_term + self.strategy * position_weight
 
     def select_child(self):
         return max(self.children, key=lambda c: c.ucb1())
@@ -140,12 +142,13 @@ class Node:
         return tuple(tuple(row) for row in self.state)
 
 class MCTS:
-    def __init__(self, iterations=1000):
+    def __init__(self, iterations=1000, strategy=0.8):
         self.iterations = iterations
         self.knowledge_base = {}  # Dictionary to store learned knowledge
         self.model_path = "tictactoe_model.pkl"
         self.last_game_moves = []  # Track moves from the last game
         self.last_game_result = None  # Track the result of the last game
+        self.strategy = strategy  # Strategy parameter for UCB1
 
     def load_knowledge(self):
         """Load the trained model if it exists"""
@@ -186,7 +189,7 @@ class MCTS:
             self.save_knowledge()
 
     def get_best_move(self, board):
-        root = Node(board)
+        root = Node(board, strategy=self.strategy)
         state_key = root.get_state_key()
         
         # If we have knowledge about this state, use it to initialize the root node
