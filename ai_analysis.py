@@ -4,7 +4,6 @@ from mcts import MCTS
 import random
 import copy
 import os
-import argparse
 
 class RandomOpponent:
     def get_move(self, board):
@@ -101,18 +100,15 @@ def play_game(ai, opponent, ai_first=True):
                 move = ai.get_best_move(board)
         
         if move is None:
-            return 0.5  # Draw
+            return 0  # Draw
         
         board[move[0]][move[1]] = current_player
         winner = check_winner(board)
         
         if winner is not None:
             if winner == 0:
-                return 0.5  # Draw
-            # Return 1 for win, 0 for loss, 0.5 for draw
-            if (winner == 1 and ai_first) or (winner == 2 and not ai_first):
-                return 1.0  # AI wins
-            return 0.0  # AI loses
+                return 0  # Draw
+            return 1 if (winner == 1 and ai_first) or (winner == 2 and not ai_first) else 0
         
         current_player = 3 - current_player
 
@@ -141,19 +137,11 @@ def train_ai_self_play(ai, num_games):
 def test_ai_performance(ai, opponent, num_games):
     """Test AI against an opponent for specified number of games"""
     wins = 0
-    draws = 0
     for _ in range(num_games):
         ai_first = random.choice([True, False])
         result = play_game(ai, opponent, ai_first)
-        if result == 1.0:
-            wins += 1
-        elif result == 0.5:
-            draws += 1
-    
-    win_rate = wins / num_games
-    draw_rate = draws / num_games
-    print(f"Wins: {wins}, Draws: {draws}, Losses: {num_games - wins - draws}")
-    return win_rate, draw_rate
+        wins += result
+    return wins / num_games
 
 def analyze_ai_performance(strategy_param, num_games, games_per_interval=100, test_games=1000):
     # Create models directory if it doesn't exist
@@ -161,8 +149,7 @@ def analyze_ai_performance(strategy_param, num_games, games_per_interval=100, te
     
     # Initialize AI with strategy parameter
     model_path = f'analysis_models/tictactoe_model_strategy_{strategy_param:.1f}.pkl'
-    print(f"strategy_param: {strategy_param}")
-    ai = MCTS(iterations=1, strategy=strategy_param)
+    ai = MCTS(iterations=1500, strategy=strategy_param)
     ai.model_path = model_path
     
     # Initialize opponents
@@ -188,17 +175,17 @@ def analyze_ai_performance(strategy_param, num_games, games_per_interval=100, te
         
         # Test against both opponents
         print(f"Testing against random opponent...")
-        random_win_rate, random_draw_rate = test_ai_performance(ai, random_opponent, test_games)
+        random_win_rate = test_ai_performance(ai, random_opponent, test_games)
         print(f"Testing against rational opponent...")
-        rational_win_rate, rational_draw_rate = test_ai_performance(ai, rational_opponent, test_games)
+        rational_win_rate = test_ai_performance(ai, rational_opponent, test_games)
         
         random_results.append(random_win_rate)
         rational_results.append(rational_win_rate)
         game_counts.append(total_training_games)
         
         print(f"Strategy {strategy_param:.1f}: Total Training Games {total_training_games}")
-        print(f"Random Opponent Win Rate: {random_win_rate:.2f}, Draw Rate: {random_draw_rate:.2f}")
-        print(f"Rational Opponent Win Rate: {rational_win_rate:.2f}, Draw Rate: {rational_draw_rate:.2f}")
+        print(f"Random Opponent Win Rate: {random_win_rate:.2f}")
+        print(f"Rational Opponent Win Rate: {rational_win_rate:.2f}")
         
         # Save the model after each training interval
         ai.save_knowledge()
@@ -209,17 +196,8 @@ def analyze_ai_performance(strategy_param, num_games, games_per_interval=100, te
     return game_counts, random_results, rational_results
 
 def main():
-    # Set up command line argument parsing
-    parser = argparse.ArgumentParser(description='Analyze AI performance with different strategy parameters')
-    parser.add_argument('--strategy', '-s', type=int, help='Strategy parameter to analyze (0 to 10, will be divided by 10)')
-    args = parser.parse_args()
-
     # Parameters
-    if args.strategy is not None:
-        strategy_params = [args.strategy / 10.0]
-    else:
-        strategy_params = np.arange(0, 1.1, 0.1)
-    
+    strategy_params = np.arange(0, 1.1, 0.1)
     num_games = 1000
     games_per_interval = 100
     test_games = 1000
