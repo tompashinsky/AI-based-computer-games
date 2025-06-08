@@ -5,7 +5,7 @@ import pickle
 import os
 
 class Node:
-    def __init__(self, state, parent=None, move=None, strategy=0.8):
+    def __init__(self, state, parent=None, move=None, strategy=0.1):
         self.state = state  # The game state (board)
         self.parent = parent  # Parent node
         self.move = move  # The move that led to this state
@@ -24,44 +24,8 @@ class Node:
                 if self.state[i][j] == 0:
                     moves.append((i, j))
         
-        # Sort moves based on domain knowledge
-        #return self.prioritize_moves(moves) - Original code
-        return moves
-
-    def prioritize_moves(self, moves):
-        """Prioritize moves based on Tic Tac Toe strategy"""
-        if not moves:
-            return moves
-
-        current_player = 2 if sum(row.count(1) for row in self.state) > sum(row.count(2) for row in self.state) else 1
-        prioritized_moves = []
         
-        # Check for winning moves
-        winning_moves = self.find_winning_moves(current_player, moves)
-        if winning_moves:
-            return winning_moves
-
-        # Check for blocking opponent's winning moves
-        opponent = 3 - current_player
-        blocking_moves = self.find_winning_moves(opponent, moves)
-        if blocking_moves:
-            return blocking_moves
-
-        # Prioritize center if available
-        if (1, 1) in moves:
-            prioritized_moves.append((1, 1))
-            moves.remove((1, 1))
-
-        # Prioritize corners
-        corners = [(0, 0), (0, 2), (2, 0), (2, 2)]
-        for corner in corners:
-            if corner in moves:
-                prioritized_moves.append(corner)
-                moves.remove(corner)
-
-        # Add remaining moves
-        prioritized_moves.extend(moves)
-        return prioritized_moves
+        return moves
 
     def find_winning_moves(self, player, available_moves):
         """Find moves that would result in an immediate win"""
@@ -96,22 +60,36 @@ class Node:
         if not move:
             return 0
             
-        # Center position has highest weight
-        if move == (1, 1):
-            return 3.0  # Significantly increased from 2.0
+        # Get current player
+        current_player = 2 if sum(row.count(1) for row in self.state) > sum(row.count(2) for row in self.state) else 1
+        opponent = 3 - current_player
+        
+        # Try the move
+        temp_state = copy.deepcopy(self.state)
+        temp_state[move[0]][move[1]] = current_player
+        
+        # Check if this is a winning move
+        if self.check_win(temp_state, current_player):
+            return 10.0  # Highest weight for winning move
             
-        # Corners have second highest weight
-        if move in [(0, 0), (0, 2), (2, 0), (2, 2)]:
-            return 1.5  # Increased from 0.8
+        # Check if this blocks opponent's winning move
+        temp_state[move[0]][move[1]] = opponent
+        if self.check_win(temp_state, opponent):
+            return 8.0  # High weight for blocking opponent's win
             
-        # Edges have lowest weight
-        return 0.5  # Increased from 0.4
+        # Position-based weights
+        if move == (1, 1):  # Center
+            return 3.0
+        elif move in [(0, 0), (0, 2), (2, 0), (2, 2)]:  # Corners
+            return 1.5
+        else:  # Edges
+            return 0.5
 
     def ucb1(self, exploration=1.41):
         if self.visits == 0:
             return float('inf')
         
-        # Modified UCB1 with domain knowledge weight
+        # Standard UCB1 formula with optional strategic weight
         win_rate = (self.wins - self.losses) / self.visits
         exploration_term = exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
         
@@ -126,7 +104,7 @@ class Node:
     def add_child(self, move):
         child_state = copy.deepcopy(self.state)
         child_state[move[0]][move[1]] = 2 if sum(row.count(1) for row in self.state) > sum(row.count(2) for row in self.state) else 1
-        child = Node(child_state, self, move)
+        child = Node(child_state, self, move, strategy=self.strategy)
         self.untried_moves.remove(move)
         self.children.append(child)
         return child
@@ -142,7 +120,7 @@ class Node:
         return tuple(tuple(row) for row in self.state)
 
 class MCTS:
-    def __init__(self, iterations=1000, strategy=0.8):
+    def __init__(self, iterations=1000, strategy=0.1):
         self.iterations = iterations
         self.knowledge_base = {}  # Dictionary to store learned knowledge
         self.model_path = "tictactoe_model.pkl"
@@ -156,6 +134,8 @@ class MCTS:
             with open(self.model_path, 'rb') as f:
                 self.knowledge_base = pickle.load(f)
             print(f"Loaded knowledge base with {len(self.knowledge_base)} states")
+        else:
+            print("No knowledge base found, starting with empty knowledge")
 
     def save_knowledge(self):
         """Save the current knowledge base"""
@@ -178,14 +158,6 @@ class MCTS:
                     self.knowledge_base[state_key]['losses'] = self.knowledge_base[state_key].get('losses', 0) + 1
                     # Decrease the win rate to make these moves less likely to be chosen
                     self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 1)
-                    
-                    # Extra penalty for not playing center when available
-                    if move != (1, 1) and state[1][1] == 0:
-                        self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 1.0)
-                    
-                    # Extra penalty for not playing corners when center is taken
-                    if move not in [(0, 0), (0, 2), (2, 0), (2, 2)] and state[1][1] == 1:
-                        self.knowledge_base[state_key]['wins'] = max(0, self.knowledge_base[state_key].get('wins', 0) - 0.5)
             self.save_knowledge()
 
     def get_best_move(self, board):
@@ -231,7 +203,7 @@ class MCTS:
         return best_move
 
     def simulate_random_play(self, board):
-        """Simulate a game with smart playout strategy"""
+        """Simulate a game with random playout strategy"""
         temp_board = copy.deepcopy(board)
         current_player = 2 if sum(row.count(1) for row in board) > sum(row.count(2) for row in board) else 1
         
@@ -253,22 +225,7 @@ class MCTS:
             if not available_moves:
                 return 0.5
             
-            # Use weighted random choice based on move priority
-            weights = []
-            for move in available_moves:
-                if move == (1, 1):  # Center
-                    weights.append(0.6)  # Increased from 0.5
-                elif move in [(0, 0), (0, 2), (2, 0), (2, 2)]:  # Corners
-                    weights.append(0.3)
-                else:  # Edges
-                    weights.append(0.1)  # Decreased from 0.2
-            
-            # Normalize weights
-            total_weight = sum(weights)
-            weights = [w/total_weight for w in weights]
-            
-            # Make weighted random move
-            move = random.choices(available_moves, weights=weights, k=1)[0]
+            move = random.choice(available_moves)
             temp_board[move[0]][move[1]] = current_player
             current_player = 3 - current_player
 

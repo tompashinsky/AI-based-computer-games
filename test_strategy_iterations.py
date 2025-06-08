@@ -4,7 +4,6 @@ from mcts import MCTS
 import random
 import copy
 import os
-import argparse
 
 class RandomOpponent:
     def get_move(self, board):
@@ -155,99 +154,67 @@ def test_ai_performance(ai, opponent, num_games):
     print(f"Wins: {wins}, Draws: {draws}, Losses: {num_games - wins - draws}")
     return win_rate, draw_rate
 
-def analyze_ai_performance(strategy_param, num_games, games_per_interval=100, test_games=1000):
-    # Create models directory if it doesn't exist
-    os.makedirs('analysis_models', exist_ok=True)
+def test_strategy_iterations(training_games=500, test_games=1000):
+    # Create plots directory
+    os.makedirs('strategy_iteration_analysis', exist_ok=True)
     
-    # Initialize AI with strategy parameter
-    model_path = f'analysis_models/tictactoe_model_strategy_{strategy_param:.1f}.pkl'
-    print(f"strategy_param: {strategy_param}")
-    ai = MCTS(iterations=1, strategy=strategy_param)
-    ai.model_path = model_path
+    # Test iterations from 1 to 100 in steps of 10
+    iterations = range(1, 101, 10)
+    # Test strategy parameters from 0 to 1 in steps of 0.1
+    strategies = np.arange(0, 1.1, 0.1)
     
     # Initialize opponents
     random_opponent = RandomOpponent()
     rational_opponent = RationalOpponent()
     
-    # Track results
-    random_results = []
-    rational_results = []
-    game_counts = []
-    
-    # Train and test for each interval
-    total_training_games = 0
-    while total_training_games <= num_games:
-        if total_training_games == 0:
-            total_training_games = games_per_interval
-            continue
+    # Create a figure for each strategy parameter
+    for strategy in strategies:
+        print(f"\nTesting strategy parameter: {strategy:.1f}")
+        
+        # Track results for this strategy
+        random_results = []
+        rational_results = []
+        
+        for iteration_count in iterations:
+            print(f"\nTesting with {iteration_count} iterations...")
             
-        print(f"\nTraining AI with strategy {strategy_param:.1f} for {total_training_games} games...")
-        # Train AI against itself for the total accumulated games
-        ai.knowledge_base = {}  # Ensure we start with empty knowledge
-        train_ai_self_play(ai, total_training_games)
+            # Initialize AI with current strategy
+            ai = MCTS(iterations=iteration_count, strategy=strategy)
+            
+            # Train AI against itself
+            print(f"\nTraining for {training_games} games...")
+            ai.knowledge_base = {}  # Start with empty knowledge
+            train_ai_self_play(ai, training_games)
+            
+            # Test against both opponents with 1000 games each
+            print(f"\nTesting against random opponent (1000 games)...")
+            random_win_rate, random_draw_rate = test_ai_performance(ai, random_opponent, test_games)
+            print(f"\nTesting against rational opponent (1000 games)...")
+            rational_win_rate, rational_draw_rate = test_ai_performance(ai, rational_opponent, test_games)
+            
+            random_results.append(random_win_rate)
+            rational_results.append(rational_win_rate)
+            
+            print(f"\nStrategy {strategy:.1f}, Iterations {iteration_count}: Training Games {training_games}")
+            print(f"Random Opponent Win Rate: {random_win_rate:.2f}, Draw Rate: {random_draw_rate:.2f}")
+            print(f"Rational Opponent Win Rate: {rational_win_rate:.2f}, Draw Rate: {rational_draw_rate:.2f}")
         
-        # Test against both opponents
-        print(f"Testing against random opponent...")
-        random_win_rate, random_draw_rate = test_ai_performance(ai, random_opponent, test_games)
-        print(f"Testing against rational opponent...")
-        rational_win_rate, rational_draw_rate = test_ai_performance(ai, rational_opponent, test_games)
+        # Create plot for this strategy parameter
+        plt.figure(figsize=(12, 8))
         
-        random_results.append(random_win_rate)
-        rational_results.append(rational_win_rate)
-        game_counts.append(total_training_games)
+        plt.plot(iterations, random_results, 'b-o', label='vs Random')
+        plt.plot(iterations, rational_results, 'r-o', label='vs Rational')
         
-        print(f"Strategy {strategy_param:.1f}: Total Training Games {total_training_games}")
-        print(f"Random Opponent Win Rate: {random_win_rate:.2f}, Draw Rate: {random_draw_rate:.2f}")
-        print(f"Rational Opponent Win Rate: {rational_win_rate:.2f}, Draw Rate: {rational_draw_rate:.2f}")
-        
-        # Save the model after each training interval
-        ai.save_knowledge()
-        
-        # Increment total training games
-        total_training_games += games_per_interval
-    
-    return game_counts, random_results, rational_results
-
-def main():
-    # Set up command line argument parsing
-    parser = argparse.ArgumentParser(description='Analyze AI performance with different strategy parameters')
-    parser.add_argument('--strategy', '-s', type=int, help='Strategy parameter to analyze (0 to 10, will be divided by 10)')
-    args = parser.parse_args()
-
-    # Parameters
-    if args.strategy is not None:
-        strategy_params = [args.strategy / 10.0]
-    else:
-        strategy_params = np.arange(0, 1.1, 0.1)
-    
-    num_games = 1000
-    games_per_interval = 100
-    test_games = 1000
-    
-    # Create plots directory
-    os.makedirs('analysis_plots', exist_ok=True)
-    
-    # Analyze each strategy parameter
-    for strategy in strategy_params:
-        print(f"\nAnalyzing strategy parameter: {strategy:.1f}")
-        game_counts, random_results, rational_results = analyze_ai_performance(
-            strategy, num_games, games_per_interval, test_games
-        )
-        
-        # Plot results
-        plt.figure(figsize=(10, 6))
-        plt.plot(game_counts, random_results, 'b-', label='vs Random Opponent')
-        plt.plot(game_counts, rational_results, 'r-', label='vs Rational Opponent')
-        plt.title(f'AI Win Rate vs Training Games (Strategy Parameter = {strategy:.1f})')
-        plt.xlabel('Number of Training Games')
+        plt.title(f'Win Rates vs MCTS Iterations (Strategy={strategy:.1f}, Trained on {training_games} games)')
+        plt.xlabel('Number of MCTS Iterations')
         plt.ylabel('Win Rate')
         plt.ylim(0, 1)
         plt.grid(True)
         plt.legend()
         
-        # Save plot
-        plt.savefig(f'analysis_plots/strategy_{strategy:.1f}_analysis.png')
+        # Save plot with strategy parameter in filename
+        plt.savefig(f'strategy_iteration_analysis/win_rates_strategy_{strategy:.1f}.png')
         plt.close()
 
 if __name__ == "__main__":
-    main() 
+    test_strategy_iterations() 

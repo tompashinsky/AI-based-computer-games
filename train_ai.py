@@ -54,7 +54,7 @@ def train_ai(num_games=1000):
     start_time = time.time()
     
     # Create two AI instances (they share the same knowledge base)
-    ai = MCTS(iterations=1500)
+    ai = MCTS(iterations=80, strategy=0.1)
     
     # Load existing knowledge if available
     ai.load_knowledge()
@@ -79,4 +79,4 @@ def train_ai(num_games=1000):
     print(f"Final knowledge base size: {len(ai.knowledge_base)} states")
 
 if __name__ == "__main__":
-    train_ai(num_games=2000)  # Train for 1000 games 
+    train_ai(num_games=500)  # Train for 1000 games 
