@@ -8,7 +8,7 @@ pygame.init()
 
 # Constants
 WIDTH, HEIGHT = 800, 850
-LINE_WIDTH = 10
+LINE_WIDTH = 5
 BOARD_ROWS, BOARD_COLS = 3, 3
 SQUARE_SIZE = 600 // BOARD_COLS
 CIRCLE_RADIUS = SQUARE_SIZE // 3
@@ -25,6 +25,10 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Tic Tac Toe")
 screen.fill(WHITE)
 
+# Load graphics
+wooden_background = pygame.image.load("wood_background.png").convert()
+wooden_background = pygame.transform.scale(wooden_background, (WIDTH, HEIGHT))
+
 # Initialize MCTS AI
 ai = MCTS(iterations=1500)
 ai.load_knowledge()
@@ -33,6 +37,53 @@ ai.load_knowledge()
 board = [[0] * BOARD_COLS for _ in range(BOARD_ROWS)]
 player_x_score = 0
 player_o_score = 0
+
+
+# ------------------- GRAPHICAL FUNCTIONS -------------------
+def draw_board():
+    board_rect = pygame.Rect(100, 100, 600, 600)
+
+    # Shadow
+    pygame.draw.rect(screen, (0, 0, 10), board_rect.move(5, 5), border_radius=20)
+
+    # Main board (lighter wood)
+    pygame.draw.rect(screen, (245, 245, 170), board_rect, border_radius=20)
+
+    # Grid lines
+    for row in range(1, BOARD_ROWS):
+        pygame.draw.line(screen, BLACK,
+                         (100, 100 + row * SQUARE_SIZE),
+                         (700, 100 + row * SQUARE_SIZE), LINE_WIDTH)
+    for col in range(1, BOARD_COLS):
+        pygame.draw.line(screen, BLACK,
+                         (100 + col * SQUARE_SIZE, 100),
+                         (100 + col * SQUARE_SIZE, 700), LINE_WIDTH)
+
+
+def draw_x(row, col):
+    start_x = col * SQUARE_SIZE + 100
+    start_y = row * SQUARE_SIZE + 100
+    end_x = start_x + SQUARE_SIZE
+    end_y = start_y + SQUARE_SIZE
+
+    # Dark red X
+    pygame.draw.line(screen, (180, 0, 0),
+                     (start_x + 35, start_y + 35),
+                     (end_x - 35, end_y - 35), CROSS_WIDTH)
+    pygame.draw.line(screen, (180, 0, 0),
+                     (start_x + 35, end_y - 35),
+                     (end_x - 35, start_y + 35), CROSS_WIDTH)
+
+
+def draw_o(row, col):
+    center = (col * SQUARE_SIZE + SQUARE_SIZE // 2 + 100,
+              row * SQUARE_SIZE + SQUARE_SIZE // 2 + 100)
+    # Blue O
+    pygame.draw.circle(screen, (100, 120, 255), (center[0], center[1]), CIRCLE_RADIUS, CIRCLE_WIDTH)
+
+
+# ---------------------------------------------------------------
+
 
 def player_choice_screen():
     screen.fill(WHITE)
@@ -69,29 +120,14 @@ def player_choice_screen():
                 elif o_button.collidepoint(mouseX, mouseY):
                     return 2  # Human plays O
 
-def draw_lines():
-    for row in range(1, BOARD_ROWS):
-        pygame.draw.line(screen, BLACK, (130, row * SQUARE_SIZE + 100), (680, row * SQUARE_SIZE + 100), LINE_WIDTH)
-    for col in range(1, BOARD_COLS):
-        pygame.draw.line(screen, BLACK, (col * SQUARE_SIZE + 100, 150), (col * SQUARE_SIZE + 100, 700), LINE_WIDTH)
-
-def draw_x(row, col):
-    start_desc = (col * SQUARE_SIZE + SPACE + 100, row * SQUARE_SIZE + SPACE + 100)
-    end_desc = (col * SQUARE_SIZE + SQUARE_SIZE - SPACE + 100, row * SQUARE_SIZE + SQUARE_SIZE - SPACE + 100)
-    start_asc = (col * SQUARE_SIZE + SPACE + 100, row * SQUARE_SIZE + SQUARE_SIZE - SPACE + 100)
-    end_asc = (col * SQUARE_SIZE + SQUARE_SIZE - SPACE + 100, row * SQUARE_SIZE + SPACE + 100)
-    pygame.draw.line(screen, BLACK, start_desc, end_desc, CROSS_WIDTH)
-    pygame.draw.line(screen, BLACK, start_asc, end_asc, CROSS_WIDTH)
-
-def draw_o(row, col):
-    center = (col * SQUARE_SIZE + SQUARE_SIZE // 2 + 100, row * SQUARE_SIZE + SQUARE_SIZE // 2 + 100)
-    pygame.draw.circle(screen, BLACK, center, CIRCLE_RADIUS, CIRCLE_WIDTH)
 
 def mark_square(row, col, player):
     board[row][col] = player
 
+
 def is_square_available(row, col):
     return board[row][col] == 0
+
 
 def check_win(player):
     for row in range(BOARD_ROWS):
@@ -100,12 +136,14 @@ def check_win(player):
     for col in range(BOARD_COLS):
         if all([board[row][col] == player for row in range(BOARD_ROWS)]):
             return True
-    if all([board[i][i] == player for i in range(BOARD_ROWS)]) or all([board[i][BOARD_ROWS - i - 1] == player for i in range(BOARD_ROWS)]):
+    if all([board[i][i] == player for i in range(BOARD_ROWS)]) or all(
+            [board[i][BOARD_ROWS - i - 1] == player for i in range(BOARD_ROWS)]):
         return True
     return False
 
+
 def display_turn(player, human_symbol):
-    turn_rect = pygame.Rect(30, 35, 270, 60)
+    turn_rect = pygame.Rect(30, 35, 270, 40)
     pygame.draw.rect(screen, (0, 175, 0), turn_rect, border_radius=10)
     font = pygame.font.Font(None, 40)
     current_player = "Human" if player == 1 else "AI"
@@ -113,6 +151,7 @@ def display_turn(player, human_symbol):
     text = font.render(f"{current_player}'s Turn ({symbol})", True, WHITE)
     text_rect = text.get_rect(center=turn_rect.center)
     screen.blit(text, text_rect)
+
 
 def display_scores():
     global player_x_score, player_o_score
@@ -127,6 +166,7 @@ def display_scores():
     screen.blit(text1, text1_rect)
     screen.blit(text2, text2_rect)
 
+
 def display_winner_message(player, result, human_symbol):
     global player_x_score, player_o_score
     if result == 1:
@@ -134,7 +174,7 @@ def display_winner_message(player, result, human_symbol):
             player_x_score += 1
         else:
             player_o_score += 1
-    
+
     # Record the game result for AI learning
     if player == 2:  # If AI was playing
         ai.record_game_result(1 if result == 1 else 0)
@@ -178,22 +218,25 @@ def display_winner_message(player, result, human_symbol):
                 elif quit_rect.collidepoint(mouseX, mouseY):
                     return "back_to_menu"
 
+
 def is_board_full():
     return all([board[row][col] != 0 for row in range(BOARD_ROWS) for col in range(BOARD_COLS)])
 
+
 def restart_game():
     global game_over, player, human_symbol
-    screen.fill(LIGHT_BLUE)
-    draw_lines()
+    screen.blit(wooden_background, (0, 0))
+    draw_board()
     for row in range(BOARD_ROWS):
         for col in range(BOARD_COLS):
             board[row][col] = 0
     player = 1 if human_symbol == 1 else 2  # If human chose X, they start; if O, AI starts
     game_over = False
 
+
 def draw_back_arrow():
     arrow_x = WIDTH - 250
-    arrow_y = 50
+    arrow_y = 35
     arrow_height = 40
     arrow_width = 220
     triangle_width = 30
@@ -216,13 +259,14 @@ def draw_back_arrow():
 
     return pygame.Rect(arrow_x, arrow_y, arrow_width, arrow_height)
 
+
 def run_tic_tac_toe():
     global player, game_over, player_x_score, player_o_score, human_symbol
 
     human_symbol = player_choice_screen()  # 1 for X, 2 for O
 
-    screen.fill(WHITE)
-    draw_lines()
+    screen.blit(wooden_background, (0, 0))
+    draw_board()
     player = 1 if human_symbol == 1 else 2
     game_over = False
     player_x_score = 0
@@ -230,8 +274,8 @@ def run_tic_tac_toe():
     display_scores()
 
     while True:
-        screen.fill(LIGHT_BLUE)
-        draw_lines()
+        screen.blit(wooden_background, (0, 0))
+        draw_board()
 
         for row in range(BOARD_ROWS):
             for col in range(BOARD_COLS):
@@ -263,14 +307,14 @@ def run_tic_tac_toe():
 
             if check_win(player):
                 game_over = True
-                result = display_winner_message(player, 1, human_symbol)  # <-- added
-                if result == "back_to_menu":                              # <-- added
+                result = display_winner_message(player, 1, human_symbol)
+                if result == "back_to_menu":
                     restart_game()
                     return "back_to_menu"
             elif is_board_full():
                 game_over = True
-                result = display_winner_message(player, 0, human_symbol)  # <-- added
-                if result == "back_to_menu":                              # <-- added
+                result = display_winner_message(player, 0, human_symbol)
+                if result == "back_to_menu":
                     restart_game()
                     return "back_to_menu"
             else:
@@ -300,14 +344,14 @@ def run_tic_tac_toe():
 
                         if check_win(player):
                             game_over = True
-                            result = display_winner_message(player, 1, human_symbol)  # <-- added
-                            if result == "back_to_menu":                              # <-- added
+                            result = display_winner_message(player, 1, human_symbol)
+                            if result == "back_to_menu":
                                 restart_game()
                                 return "back_to_menu"
                         elif is_board_full():
                             game_over = True
-                            result = display_winner_message(player, 0, human_symbol)  # <-- added
-                            if result == "back_to_menu":                              # <-- added
+                            result = display_winner_message(player, 0, human_symbol)
+                            if result == "back_to_menu":
                                 restart_game()
                                 return "back_to_menu"
                         else:
