@@ -71,6 +71,10 @@ DQN_COLOR_ACTION_SIZE = 6  # Keep for backward compatibility during transition
 
 # Debug constants
 DEBUG_AI = True  # Enable AI debug overlays and console logs by default (toggle with 'D')
+# Temporary aiming config
+# When False, the AI will only consider direct line-of-sight targets and will not
+# attempt pre-shot bump adjustments that can leverage bounces.
+AI_ENABLE_BOUNCE = False
 
 class Bubble:
     def __init__(self, x: int, y: int, color: Tuple[int, int, int], is_moving: bool = False):
@@ -424,7 +428,7 @@ class Game:
         for bubble in self.bubbles:
             bubble.draw(self.screen)
         
-        # DEBUG: Draw per-bubble adjacent-same-color counts (self-color adjacency)
+        # DEBUG: Draw per-empty-cell same-color counts for CURRENT bubble color on AI side
         if DEBUG_AI:
             try:
                 # Build AI grid as color indices
@@ -437,63 +441,76 @@ class Game:
                             ai_grid[(row, col)] = color_idx
                         except ValueError:
                             continue
-                # Render per-bubble self-color adjacency counts
+                # Current shooter 2 color index
+                try:
+                    current_color_idx = BUBBLE_COLORS.index(self.shooter_two['current_bubble'].color) if self.shooter_two['current_bubble'] else 0
+                except ValueError:
+                    current_color_idx = 0
+                # Compute per-cell counts (occupied cells will be 0)
+                from bubble_geometry import neighbor_same_color_counts as _ncounts
+                counts = _ncounts(ai_grid, current_color_idx)
+                # Use last reachable targets if available to avoid clutter, else recompute
+                reachable = getattr(self, 'last_reachable_targets', None)
+                if reachable is None:
+                    reachable = self.get_valid_targets_constrained(2)
                 font_cnt = pygame.font.Font(None, 18)
-                for bubble in self.bubbles:
-                    if bubble.grid_pos is not None and bubble.grid_pos[2] == 2:
-                        row, col, _ = bubble.grid_pos
-                        # Get this bubble's color index
-                        try:
-                            bubble_color_idx = BUBBLE_COLORS.index(bubble.color)
-                        except ValueError:
-                            bubble_color_idx = -1
-                        # Count adjacent same-color neighbors in honeycomb pattern
-                        if row % 2 == 0:
-                            adj = [(row-1, col), (row+1, col), (row, col-1), (row, col+1), (row-1, col-1), (row+1, col-1)]
-                        else:
-                            adj = [(row-1, col), (row+1, col), (row, col-1), (row, col+1), (row-1, col+1), (row+1, col+1)]
-                        val = 0
-                        for ar, ac in adj:
-                            if (ar, ac) in ai_grid and ai_grid[(ar, ac)] == bubble_color_idx:
-                                val += 1
-                        txt = font_cnt.render(str(val), True, (0, 255, 255))
-                        self.screen.blit(txt, (int(bubble.x) - 5, int(bubble.y) - 28))
+                for (row, col) in reachable:
+                    idx = row * 35 + col
+                    if 0 <= idx < counts.shape[0]:
+                        key = (row, col, 2)
+                        if key not in self.grid_to_screen:
+                            continue
+                        x, y = self.grid_to_screen[key]
+                        val = int(counts[idx])
+                        color = (0, 255, 255) if val > 0 else (160, 160, 160)
+                        txt = font_cnt.render(str(val), True, color)
+                        self.screen.blit(txt, (int(x) - 6, int(y) - (BUBBLE_RADIUS + 18)))
             except Exception:
                 pass
         
-        # DEBUG: Draw per-cell Q-values on the AI grid (player 2)
+        # DEBUG: Draw per-cell Q-values on the AI grid (player 2) using the SAME reachable target set as selection
         if DEBUG_AI and hasattr(self, 'last_q_values') and self.last_q_values is not None:
-            font_small = pygame.font.Font(None, 22)  # Bigger font for readability
+            font_small = pygame.font.Font(None, 20)
+            font_big = pygame.font.Font(None, 28)
             best_idx = getattr(self, 'last_best_action_idx', None)
-            # Show Q-values ONLY for reachable bubble targets (occupied cells) to match masking
-            valid_set = set(self.get_reachable_bubble_targets(2))
-            for row, col in valid_set:
+            # Use the exact reachable targets used at selection time, if available
+            reachable = getattr(self, 'last_reachable_targets', None)
+            if reachable is None:
+                reachable = []
+            for (row, col) in reachable:
+                idx = row * 35 + col
+                if idx < 0 or idx >= len(self.last_q_values):
+                    continue
+                q_val = float(self.last_q_values[idx])
+                if not math.isfinite(q_val):
+                    continue
                 key = (row, col, 2)
                 if key not in self.grid_to_screen:
                     continue
-                idx = row * 35 + col  # GRID_COLS = 35
                 x, y = self.grid_to_screen[key]
-                q_val = float(self.last_q_values[idx])
-                if not math.isfinite(q_val):
-                    text_str = "-inf"
-                    color = (210, 210, 210)  # Brighter
-                else:
-                    text_str = f"{q_val:.1f}"
-                    color = (255, 255, 220)  # Brighter
-                if best_idx is not None and idx == best_idx:
-                    color = (255, 240, 120)  # Highlight best, brighter
-                    pygame.draw.circle(self.screen, (255, 240, 120), (int(x), int(y)), 12, 1)
-                txt = font_small.render(text_str, True, color)
-                tx = int(x) - 12
-                ty = int(y) - 10
-                # Draw black background behind the chosen target's Q-value for readability
+                label_y = int(y) - (BUBBLE_RADIUS + 20)
+                is_best = (best_idx is not None and idx == best_idx)
+                text_color = (255, 255, 255) if not is_best else (255, 215, 0)
+                font = font_big if is_best else font_small
+                text_str = f"{q_val:.2f}"
+                txt = font.render(text_str, True, text_color)
+                pad_x, pad_y = 4, 2
+                tx = int(x) - txt.get_width() // 2
+                ty = label_y - txt.get_height() // 2
+                bg_rect = pygame.Rect(tx - pad_x, ty - pad_y, txt.get_width() + 2 * pad_x, txt.get_height() + 2 * pad_y)
+                pygame.draw.rect(self.screen, (0, 0, 0), bg_rect)
+                self.screen.blit(txt, (tx, ty))
+            # Additionally, outline the chosen action if available
+            if hasattr(self, 'last_chosen_action_idx') and self.last_chosen_action_idx is not None:
                 try:
-                    if hasattr(self, 'last_chosen_action_idx') and self.last_chosen_action_idx is not None and idx == int(self.last_chosen_action_idx):
-                        bg_rect = pygame.Rect(tx - 2, ty - 2, txt.get_width() + 4, txt.get_height() + 4)
-                        pygame.draw.rect(self.screen, (0, 0, 0), bg_rect)
+                    cidx = int(self.last_chosen_action_idx)
+                    crow, ccol = cidx // 35, cidx % 35
+                    key = (crow, ccol, 2)
+                    if key in self.grid_to_screen:
+                        cx, cy = self.grid_to_screen[key]
+                        pygame.draw.circle(self.screen, (255, 0, 0), (int(cx), int(cy)), 14, 2)
                 except Exception:
                     pass
-                self.screen.blit(txt, (tx, ty))
         
         # Draw AI shooting angles (all possible angles)
         self.draw_ai_shooting_angles()
@@ -774,7 +791,10 @@ class Game:
                 dqn_state = self.encode_dqn_state()
                 
                 # NEW: Bubble-target action system using hybrid masking
-                reachable_targets = self.get_hybrid_masked_targets(2)
+                # Use empty-cell targets: valid placement + direct LOS (no bounce by default)
+                reachable_targets = self.get_valid_targets_constrained(2)
+                # Store for debug rendering parity with selection
+                self.last_reachable_targets = list(reachable_targets)
                 
                 # If no targets reachable, let AI shoot randomly (will lose anyway)
                 if not reachable_targets:
@@ -798,25 +818,23 @@ class Game:
                         state_tensor = torch.FloatTensor(dqn_state).unsqueeze(0).to('cpu')
                         q_values = self.dqn_agent.policy_net(state_tensor)
                         
-                        # Apply masking: front-most occupied bubble per row only (simple mask)
-                        front_targets = self.get_front_bubble_targets(2)
-                        if front_targets:
-                            masked_q_values = self.dqn_agent.apply_action_mask(q_values, front_targets)
+                        # Apply masking using the SAME reachable_targets used for selection
+                        if reachable_targets:
+                            masked_q_values = self.dqn_agent.apply_action_mask(q_values, reachable_targets)
                             # Show top 5 valid actions
                             valid_action_indices = []
                             for row, col in reachable_targets:
                                 action_idx = row * 35 + col  # GRID_COLS = 35
                                 valid_action_indices.append(action_idx)
-                            
                             if valid_action_indices:
                                 valid_q_values = masked_q_values[0][valid_action_indices]
                                 top_5_indices = torch.topk(valid_q_values, min(5, len(valid_q_values))).indices
                                 top_5_actions = [(valid_action_indices[idx.item()], valid_q_values[idx.item()]) for idx in top_5_indices]
                                 print(f"Top 5 Q-values (valid targets): {[(idx, val.item()) for idx, val in top_5_actions]}")
                         else:
-                            # No front targets - visualize as all -inf
+                            # No reachable targets - visualize as all -inf
                             masked_q_values = torch.full_like(q_values, float('-inf'))
-                            print("No front targets - Qs shown as -inf")
+                            print("No reachable targets - Qs shown as -inf")
 
                         # Store masked Q-values for on-screen visualization
                         try:
@@ -834,7 +852,7 @@ class Game:
                         except Exception:
                             self.last_best_action_idx = None
                 
-                # Convert target action index to row, col coordinates (occupied cell)
+                # Convert target action index to row, col coordinates (empty-cell target)
                 target_row = ai_target_action // 35  # GRID_COLS = 35
                 target_col = ai_target_action % 35
                 
@@ -851,11 +869,11 @@ class Game:
                 shooter_x = self.shooter_two['x']
                 shooter_y = self.shooter_two['y']
                 
-                # Get target bubble screen position (must exist)
-                if (target_row, target_col, 2) in self.grid_to_screen and (target_row, target_col, 2) in self.grid:
+                # Get target empty-cell screen position
+                if (target_row, target_col, 2) in self.grid_to_screen:
                     target_x, target_y = self.grid_to_screen[(target_row, target_col, 2)]
                 else:
-                    # If chosen target is no longer occupied, fallback to first reachable
+                    # Fallback to first reachable target
                     if reachable_targets:
                         fr, fc = reachable_targets[0]
                         target_x, target_y = self.grid_to_screen[(fr, fc, 2)]
@@ -879,35 +897,60 @@ class Game:
                 # Direct-LOS-only policy: compute direct angle to the bubble center
                 ai_angle = calculate_angle_to_target(shooter_x, shooter_y, target_x, target_y)
 
-                # Training parity: apply slight nudge based on verticality and clamp to [90°, 270°]
-                try:
-                    rad = math.radians(ai_angle)
-                    bump_deg = 3.0 * abs(math.sin(rad))
-                    if 90.0 <= ai_angle <= 270.0:
-                        if target_y < shooter_y:
-                            # Upward shot -> decrease angle toward 90° (higher)
-                            ai_angle -= bump_deg
-                        else:
-                            # Downward shot -> increase angle toward 270° (lower)
-                            ai_angle += bump_deg
-                        # Clamp for right-shooter
-                        if ai_angle < 90.0:
-                            ai_angle = 90.0
-                        elif ai_angle > 270.0:
-                            ai_angle = 270.0
-                except Exception:
-                    pass
-
-                # Training parity: refine angle with small offsets to prefer exact landing on the intended target
+                # Training parity: refine angle first, then simulate without bump
                 try:
                     ai_angle = self._refine_angle_to_hit_target(ai_angle, 2, shooter_x, shooter_y, target_row, target_col)
                 except Exception:
                     pass
+
+                # Pre-shot simulation & bump disabled when bounces are off
+                if AI_ENABLE_BOUNCE:
+                    try:
+                        px, py = self.predict_bubble_landing(shooter_x, shooter_y, ai_angle, 2)
+                        self.last_predicted_landing = (px, py)
+                        nearest = self.find_nearest_grid_position(px, py)
+                        
+                        # Check if simulation failed to hit target
+                        if nearest is None or nearest[2] != 2 or nearest[0] != target_row or nearest[1] != target_col:
+                            # Simulation failed - apply bump based on verticality
+                            rad = math.radians(ai_angle)
+                            bump_deg = 6.0 * abs(math.sin(rad))
+                            bump_sign = 0.0
+                            if 90.0 <= ai_angle <= 270.0:
+                                if target_y < shooter_y:
+                                    # Upward shot -> increase angle toward 270° (more up)
+                                    bump_sign = +1.0
+                                else:
+                                    # Downward shot -> decrease angle toward 90° (more down)
+                                    bump_sign = -1.0
+                            
+                            # Apply bump and retry simulation (up to 2 tries)
+                            tries = 2
+                            while tries > 0 and bump_sign != 0.0:
+                                ai_angle += bump_sign * bump_deg
+                                # Clamp for right-shooter
+                                if ai_angle < 90.0:
+                                    ai_angle = 90.0
+                                elif ai_angle > 270.0:
+                                    ai_angle = 270.0
+                                
+                                # Re-simulate
+                                px, py = self.predict_bubble_landing(shooter_x, shooter_y, ai_angle, 2)
+                                self.last_predicted_landing = (px, py)
+                                nearest = self.find_nearest_grid_position(px, py)
+                                
+                                # Check if we hit the target now
+                                if nearest is not None and nearest[2] == 2 and nearest[0] == target_row and nearest[1] == target_col:
+                                    break
+                                
+                                tries -= 1
+                    except Exception:
+                        pass
                 
                 # Store target and angle for visual debugging
                 self.last_ai_target = (target_x, target_y)
                 self.last_ai_angle = ai_angle
-                self.last_predicted_landing = None
+                # last_predicted_landing updated above if simulation ran
                 
                 if DEBUG_AI:
                     print(f"Grid Hit Angle: {ai_angle:.1f}°")
@@ -921,7 +964,7 @@ class Game:
                 
                 self.shooter_two['angle'] = ai_angle
                 self.shoot(ai_angle, force_player=2)  # Ensure only right shooter acts
-                self.ai_action_cooldown = 2 * 60  # 2 seconds at 60 FPS
+                self.ai_action_cooldown = int(1.5 * 60)  # 1.5 seconds at 60 FPS
         if self.ai_action_cooldown > 0:
             self.ai_action_cooldown -= 1
 
@@ -1045,11 +1088,33 @@ class Game:
         return get_valid_targets(grid_dict, player_num, self.center_line_offset)
     
     def get_valid_targets_constrained(self, player_num):
-        """Valid targets filtered by actual reachability (direct LOS or with top/bottom bounce)."""
+        """Valid targets filtered by actual reachability.
+        When AI_ENABLE_BOUNCE is False, only direct line-of-sight targets are allowed.
+        """
         shooter = self.shooter_one if player_num == 1 else self.shooter_two
         shooter_x, shooter_y = shooter['x'], shooter['y']
 
         raw_targets = self.get_valid_targets(player_num)
+        # Constrain to empty cells adjacent ONLY to the front-most (max col) filled cell per row
+        # Build front-most per-row map for this player
+        front_by_row = {}
+        for (row, col, p), bubble in self.grid.items():
+            if p != player_num:
+                continue
+            prev = front_by_row.get(row)
+            if prev is None or col > prev:
+                front_by_row[row] = col
+        def _adjacent_to_front_only(r, c) -> bool:
+            if r not in front_by_row:
+                return False
+            fcol = front_by_row[r]
+            if r % 2 == 0:
+                adj = [(r-1, fcol), (r+1, fcol), (r, fcol-1), (r, fcol+1), (r-1, fcol-1), (r+1, fcol-1)]
+            else:
+                adj = [(r-1, fcol), (r+1, fcol), (r, fcol-1), (r, fcol+1), (r-1, fcol+1), (r+1, fcol+1)]
+            # Allow only if the open cell (r,c) is one of these neighbors of the front-most bubble
+            return (r, c) in adj
+        raw_targets = [(r, c) for (r, c) in raw_targets if _adjacent_to_front_only(r, c)]
         filtered = []
 
         for (row, col) in raw_targets:
@@ -1063,22 +1128,23 @@ class Game:
                 filtered.append((row, col))
                 continue
 
-            # 2) Deterministic bounce via wall based on LOS from target to wall
-            found = False
-            for wall in ("top", "bottom"):
-                if self._target_has_los_to_wall(player_num, row, col, wall):
-                    ang = self._compute_bounce_angle_via_wall(player_num, shooter_x, shooter_y, row, col, wall)
-                    if ang is not None:
-                        pred_x, pred_y = self.predict_bubble_landing(shooter_x, shooter_y, ang, player_num)
-                        nearest = self.find_nearest_grid_position(pred_x, pred_y)
-                        if nearest is not None:
-                            r, c, p = nearest
-                            if p == player_num and r == row and c == col:
-                                filtered.append((row, col))
-                                found = True
-                                break
-            if found:
-                continue
+            # 2) Optional: allow bounce paths only when enabled
+            if AI_ENABLE_BOUNCE:
+                found = False
+                for wall in ("top", "bottom"):
+                    if self._target_has_los_to_wall(player_num, row, col, wall):
+                        ang = self._compute_bounce_angle_via_wall(player_num, shooter_x, shooter_y, row, col, wall)
+                        if ang is not None:
+                            pred_x, pred_y = self.predict_bubble_landing(shooter_x, shooter_y, ang, player_num)
+                            nearest = self.find_nearest_grid_position(pred_x, pred_y)
+                            if nearest is not None:
+                                r, c, p = nearest
+                                if p == player_num and r == row and c == col:
+                                    filtered.append((row, col))
+                                    found = True
+                                    break
+                if found:
+                    continue
 
         return filtered
 
@@ -1625,11 +1691,29 @@ class Game:
         return get_valid_targets(grid_dict, player_num, self.center_line_offset)
     
     def get_valid_targets_constrained(self, player_num):
-        """Valid targets filtered by actual reachability (direct or via bounce), no cone restriction."""
+        """Valid targets filtered by actual reachability (direct only unless AI_ENABLE_BOUNCE)."""
         shooter = self.shooter_one if player_num == 1 else self.shooter_two
         shooter_x, shooter_y = shooter['x'], shooter['y']
         
         raw_targets = self.get_valid_targets(player_num)
+        # Constrain to empty cells adjacent ONLY to the front-most (max col) filled cell per row
+        front_by_row = {}
+        for (row, col, p), bubble in self.grid.items():
+            if p != player_num:
+                continue
+            prev = front_by_row.get(row)
+            if prev is None or col > prev:
+                front_by_row[row] = col
+        def _adjacent_to_front_only(r, c) -> bool:
+            if r not in front_by_row:
+                return False
+            fcol = front_by_row[r]
+            if r % 2 == 0:
+                adj = [(r-1, fcol), (r+1, fcol), (r, fcol-1), (r, fcol+1), (r-1, fcol-1), (r+1, fcol-1)]
+            else:
+                adj = [(r-1, fcol), (r+1, fcol), (r, fcol-1), (r, fcol+1), (r-1, fcol+1), (r+1, fcol+1)]
+            return (r, c) in adj
+        raw_targets = [(r, c) for (r, c) in raw_targets if _adjacent_to_front_only(r, c)]
         filtered = []
         
         for (row, col) in raw_targets:
@@ -1638,12 +1722,23 @@ class Game:
             target_x, target_y = self.grid_to_screen[(row, col, player_num)]
             # 1) Fast-path: direct line-of-sight without intersecting own bubbles
             if self._has_clear_path(player_num, shooter_x, shooter_y, row, col):
-                filtered.append((row, col))
-                continue
+                # Verify by simulating angle to ensure landing on intended cell
+                try:
+                    ang = calculate_angle_to_target(shooter_x, shooter_y, target_x, target_y)
+                    if hasattr(self, '_refine_angle_to_hit_target'):
+                        ang = self._refine_angle_to_hit_target(ang, player_num, shooter_x, shooter_y, row, col)
+                    px, py = self.predict_bubble_landing(shooter_x, shooter_y, ang, player_num)
+                    nearest = self.find_nearest_grid_position(px, py)
+                    if nearest is not None and nearest[2] == player_num and nearest[0] == row and nearest[1] == col:
+                        filtered.append((row, col))
+                        continue
+                except Exception:
+                    pass
 
-            # 2) Precise bounce validation using physics simulation + expanded angle sampling
-            if self._has_bounce_path_to_target(player_num, shooter_x, shooter_y, row, col):
-                filtered.append((row, col))
+            # 2) Optional bounce validation
+            if AI_ENABLE_BOUNCE:
+                if self._has_bounce_path_to_target(player_num, shooter_x, shooter_y, row, col):
+                    filtered.append((row, col))
         
         return filtered
 

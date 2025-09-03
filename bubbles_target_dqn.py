@@ -134,6 +134,10 @@ class TargetDQNAgent:
         self.replay_buffer = ReplayBuffer(REPLAY_BUFFER_SIZE)
         self.steps_done = 0
         self.epsilon = self.eps_start
+        # Diagnostics for action selection
+        self.last_selection_random = False
+        self.last_selected_action = None
+        self.last_epsilon = self.epsilon
     
     def set_evaluation_mode(self):
         """Set the policy network to evaluation mode (disable dropout and batch norm updates)"""
@@ -180,6 +184,7 @@ class TargetDQNAgent:
             # Only update training parameters when in training mode
             self.steps_done += 1
             self.epsilon = max(self.eps_end, self.eps_start - (self.eps_start - self.eps_end) * self.steps_done / self.eps_decay)
+            self.last_epsilon = self.epsilon
             
             if random.random() < self.epsilon:
                 # Random exploration: choose from valid targets only
@@ -189,10 +194,16 @@ class TargetDQNAgent:
                     for row, col in valid_targets:
                         action_idx = row * 35 + col  # GRID_COLS = 35
                         valid_action_indices.append(action_idx)
-                    return random.choice(valid_action_indices)
+                    action = random.choice(valid_action_indices)
+                    self.last_selection_random = True
+                    self.last_selected_action = action
+                    return action
                 else:
                     # No valid targets - choose random action (will be masked)
-                    return random.randrange(self.action_dim)
+                    action = random.randrange(self.action_dim)
+                    self.last_selection_random = True
+                    self.last_selected_action = action
+                    return action
         else:
             # Set evaluation mode for inference
             self.set_evaluation_mode()
@@ -207,10 +218,16 @@ class TargetDQNAgent:
         if valid_targets and len(valid_targets) > 0:
             q_values = self.apply_action_mask(q_values, valid_targets)
             # Select best action (invalid ones are masked with -infinity)
-            return q_values.argmax().item()
+            action = q_values.argmax().item()
+            self.last_selection_random = False
+            self.last_selected_action = action
+            return action
         else:
             # No valid targets - return random action (will be handled by environment)
-            return random.randrange(self.action_dim)
+            action = random.randrange(self.action_dim)
+            self.last_selection_random = True
+            self.last_selected_action = action
+            return action
     
     def store_transition(self, state, action, reward, next_state, done):
         self.replay_buffer.push(state, action, reward, next_state, done)

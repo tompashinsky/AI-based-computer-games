@@ -50,8 +50,13 @@ from bubble_geometry import (
     grid_to_screen, screen_to_grid, is_valid_placement, get_valid_targets,
     check_lose_condition, calculate_angle_to_target,
     encode_compact_state, encode_compact_state_consistent,
-    neighbor_same_color_counts, get_hybrid_masked_targets
+    neighbor_same_color_counts, get_hybrid_masked_targets,
+    get_angular_los_filtered_targets
 )
+
+# Temporary aiming config (match game): when False, training uses direct LOS only and
+# skips bump adjustments that can leverage bounces.
+AI_ENABLE_BOUNCE = False
 
 # State size calculation using shared constants
 # FIXED: Only current bubble color to prevent AI from confusing current vs next
@@ -360,6 +365,42 @@ class TargetBubbleShooterEnv:
 
         # Only draw right-side grid (player 2)
         draw_grid(self.grid_player2, 2)
+        # Draw reachable empty targets (mask visualization)
+        try:
+            reachable = self.get_reachable_empty_targets(2)
+            # Also compute per-cell same-color counts for current bubble color
+            from bubble_geometry import neighbor_same_color_counts as _ncounts
+            counts = _ncounts(self.grid_player2, self.current_bubble_color.get(2, 0))
+            for (r, c) in reachable:
+                x, y = grid_to_screen(r, c, 2, self.center_line_offset)
+                idx = r * GRID_COLS + c
+                val = int(counts[idx]) if 0 <= idx < counts.shape[0] else 0
+                # Hollow circle for reachable empty cell
+                pygame.draw.circle(screen, (80, 220, 255), (int(x), int(y)), BUBBLE_RADIUS - 3, 2)
+                # Overlay the same-color count
+                txt = self._dbg_font.render(str(val), True, (0, 255, 255) if val > 0 else (160, 160, 160))
+                screen.blit(txt, (int(x) - 6, int(y) - (BUBBLE_RADIUS + 12)))
+            # Highlight chosen target if available
+            try:
+                act = getattr(self, '_agent_act', None)
+                if act is not None and isinstance(act, int) and act >= 0:
+                    cr, cc = act // GRID_COLS, act % GRID_COLS
+                    cx, cy = grid_to_screen(cr, cc, 2, self.center_line_offset)
+                    pygame.draw.circle(screen, (255, 200, 0), (int(cx), int(cy)), BUBBLE_RADIUS - 1, 3)
+            except Exception:
+                pass
+            # Highlight predicted physical landing (if simulated)
+            try:
+                if getattr(self, '_dbg_landing_rc', None) is not None:
+                    lr, lc = self._dbg_landing_rc
+                    lx, ly = grid_to_screen(lr, lc, 2, self.center_line_offset)
+                    pygame.draw.circle(screen, (255, 80, 80), (int(lx), int(ly)), BUBBLE_RADIUS - 2, 2)
+                    # line between intended and landing for error visualization
+                    pygame.draw.line(screen, (255, 80, 80), (int(target_x), int(target_y)), (int(lx), int(ly)), 2)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # Draw only right shooter
         right_shooter_x = SCREEN_WIDTH - BUBBLE_RADIUS * 2
@@ -402,10 +443,35 @@ class TargetBubbleShooterEnv:
                 pygame.draw.circle(screen, (255, 255, 0), (int(bx), int(by)), 5, 2)
 
         # HUD text
+        # HUD lines: include mask size and row-wise distribution
+        try:
+            mask_sz = len(self.get_reachable_empty_targets(2))
+        except Exception:
+            mask_sz = -1
+        # Compute per-row counts for reachable targets
+        row_counts_str = ""
+        try:
+            _reachable = self.get_reachable_empty_targets(2)
+            row_counts = [0] * GRID_ROWS
+            for (rr, cc) in _reachable:
+                if 0 <= rr < GRID_ROWS:
+                    row_counts[rr] += 1
+            # Compact representation to fit HUD: show as comma-separated list
+            row_counts_str = ",".join(str(v) for v in row_counts)
+        except Exception:
+            row_counts_str = "err"
         hud_lines = [
             f"Player: {player_num}  Step: {self.step_count}",
             f"Target: ({target_row}, {target_col})  Angle: {angle:.1f}°",
             f"Score: {self.scores.get(2, 0)}  Offset: {self.target_center_line_offset}",
+            f"Reachable empty targets: {mask_sz}",
+            f"Row counts: [{row_counts_str}]",
+            # Selection diagnostics from agent (random vs greedy, epsilon, action idx)
+            (f"Pick: RANDOM  eps={getattr(self,'_agent_eps',-1):.2f}  action={getattr(self,'_agent_act',-1)}"
+             if getattr(self,'_agent_rand',False) else
+             f"Pick: GREEDY  eps={getattr(self,'_agent_eps',-1):.2f}  action={getattr(self,'_agent_act',-1)}"),
+            # Chosen row/col for clarity
+            (lambda a: f"Chosen rc: ({a//GRID_COLS},{a%GRID_COLS})" if isinstance(a,int) and a>=0 else "Chosen rc: (-,-)")(getattr(self,'_agent_act',-1)),
         ]
         y_text = 10
         for line in hud_lines:
@@ -449,6 +515,54 @@ class TargetBubbleShooterEnv:
     def get_bubble_targets(self, player_num):
         """Return all occupied (row,col) cells in the player's grid."""
         return [(r, c) for (r, c) in self.grid_player2.keys()]
+
+    def get_reachable_empty_targets(self, player_num: int):
+        """Return empty (row,col) cells that are valid placements and reachable by angular LOS (swept corridor)."""
+        SCREEN_WIDTH = 1200
+        BUBBLE_RADIUS = 20
+        shooter_x = SCREEN_WIDTH - BUBBLE_RADIUS * 2
+        shooter_y = self.shooter_y[player_num]
+        # Build candidate empty cells (valid placement) constrained to adjacency to the front-most bubble per row
+        candidates = []
+        # Front-most (max col) per row map
+        front_by_row = {}
+        for (row, col), color in self.grid_player2.items():
+            prev = front_by_row.get(row)
+            if prev is None or col > prev:
+                front_by_row[row] = col
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                if (row, col) in self.grid_player2:
+                    continue
+                if not self.is_valid_placement(row, col, self.grid_player2):
+                    continue
+                # Require adjacency ONLY to the front-most bubble in this row
+                fcol = front_by_row.get(row)
+                if fcol is None:
+                    continue
+                if row % 2 == 0:
+                    adj_front = [(row-1, fcol), (row+1, fcol), (row, fcol-1), (row, fcol+1), (row-1, fcol-1), (row+1, fcol-1)]
+                else:
+                    adj_front = [(row-1, fcol), (row+1, fcol), (row, fcol-1), (row, fcol+1), (row-1, fcol+1), (row+1, fcol+1)]
+                if (row, col) not in adj_front:
+                    continue
+                candidates.append((row, col))
+        # Use shared angular LOS filter with narrower corridor to avoid over-blocking
+        grid_map = self.grid_player2
+        prelim = get_angular_los_filtered_targets(
+            shooter_x, shooter_y, candidates, player_num, grid_map, self.center_line_offset, corridor_width=0.5 * BUBBLE_RADIUS
+        )
+        # Post-simulation verification: keep only targets where a simulated shot lands on the intended cell
+        verified = []
+        for (row, col) in prelim:
+            tx, ty = self._grid_to_screen(row, col, player_num)
+            ang = math.degrees(math.atan2(ty - shooter_y, tx - shooter_x))
+            rx = shooter_x + math.cos(math.radians(ang)) * 2000.0
+            ry = shooter_y + math.sin(math.radians(ang)) * 2000.0
+            landing, _, _ = self._simulate_shot_with_bounce(player_num, shooter_x, shooter_y, rx, ry, preferred_target=(row, col))
+            if landing is not None and landing[0] == row and landing[1] == col:
+                verified.append((row, col))
+        return verified
 
     def _angle_for_target(self, player_num: int, row: int, col: int):
         # Use shared geometry functions for consistency
@@ -732,7 +846,9 @@ class TargetBubbleShooterEnv:
             ang = base_angle + off
             rx = shooter_x + math.cos(math.radians(ang)) * 2000.0
             ry = shooter_y + math.sin(math.radians(ang)) * 2000.0
-            landing, _, _ = self._simulate_shot_with_bounce(player_num, shooter_x, shooter_y, rx, ry)
+            landing, _, _ = self._simulate_shot_with_bounce(
+                player_num, shooter_x, shooter_y, rx, ry, preferred_target=(target_row, target_col)
+            )
             if landing is not None and landing == (target_row, target_col):
                 return ang
         return base_angle
@@ -907,7 +1023,7 @@ class TargetBubbleShooterEnv:
         col = int(round(val))
         return max(0, min(GRID_COLS - 1, col))
 
-    def _simulate_shot_with_bounce(self, player_num: int, shooter_x: float, shooter_y: float, target_x: float, target_y: float):
+    def _simulate_shot_with_bounce(self, player_num: int, shooter_x: float, shooter_y: float, target_x: float, target_y: float, preferred_target: tuple = None):
         """Simulate a shot with wall bounces (top/bottom) and return a landing (row, col).
         Snap when colliding with an existing bubble or when reaching the center line band.
         Returns (row, col), path_points, bounce_points or (None, path_points, bounce_points) if cannot determine.
@@ -960,11 +1076,16 @@ class TargetBubbleShooterEnv:
                 y = (SCREEN_HEIGHT - BUBBLE_RADIUS) - (y - (SCREEN_HEIGHT - BUBBLE_RADIUS))
                 vy = -vy
                 bounce_points.append((x, y))
-            # reached center line band -> snap to nearest empty valid grid cell near current position
+            # reached center line band -> snap to empty valid grid cell
             if player_num == 2 and x <= middle_x + BUBBLE_RADIUS:
-                # find nearest empty valid cell to current (x,y)
+                # If we have an intended empty target and it's valid, snap directly to it
+                if preferred_target is not None:
+                    tr, tc = preferred_target
+                    if (tr, tc) not in grid and self.is_valid_placement(tr, tc, grid):
+                        return (tr, tc), path_points, bounce_points
+                # Otherwise, find best empty valid cell using a bias toward the preferred target if provided
                 best = None
-                best_dist = 1e9
+                best_score = 1e18
                 for row in range(GRID_ROWS):
                     for col in range(GRID_COLS):
                         if (row, col) in grid:
@@ -972,9 +1093,19 @@ class TargetBubbleShooterEnv:
                         if not self.is_valid_placement(row, col, grid):
                             continue
                         gx, gy = self._grid_to_screen(row, col, player_num)
-                        d2 = (gx - x) * (gx - x) + (gy - y) * (gy - y)
-                        if d2 < best_dist:
-                            best_dist = d2
+                        # positional proximity to current crossing point
+                        d_pos2 = (gx - x) * (gx - x) + (gy - y) * (gy - y)
+                        # bias toward intended target cell if available
+                        if preferred_target is not None:
+                            tr, tc = preferred_target
+                            tx, ty = self._grid_to_screen(tr, tc, player_num)
+                            d_tar2 = (gx - tx) * (gx - tx) + (gy - ty) * (gy - ty)
+                        else:
+                            d_tar2 = 0.0
+                        # score: strongly prefer cells close to intended target, weakly prefer close to crossing point
+                        score = d_tar2 + 0.1 * d_pos2
+                        if score < best_score:
+                            best_score = score
                             best = (row, col)
                 if best is not None:
                     return best, path_points, bounce_points
@@ -999,10 +1130,15 @@ class TargetBubbleShooterEnv:
                 if ddx*ddx + ddy*ddy <= (2*BUBBLE_RADIUS) ** 2:  # Removed the -2 tolerance
                     collided = True
                     cx_hit, cy_hit = qx, qy
-                    # pick nearest empty neighbor
+                    # If intended empty target is a neighbor and valid, use it
                     nbrs = self._neighbors(r, c)
+                    if preferred_target is not None:
+                        tr, tc = preferred_target
+                        if (tr, tc) in nbrs and (tr, tc) not in grid and self.is_valid_placement(tr, tc, grid):
+                            return (tr, tc), path_points, bounce_points
+                    # pick best empty neighbor (bias toward preferred target if provided)
                     best = None
-                    best_dist = 1e9
+                    best_score = 1e18
                     for (nr, nc) in nbrs:
                         if nr < 0 or nr >= GRID_ROWS or nc < 0 or nc >= GRID_COLS:
                             continue
@@ -1011,9 +1147,16 @@ class TargetBubbleShooterEnv:
                         if not self.is_valid_placement(nr, nc, grid):
                             continue
                         nx, ny = self._grid_to_screen(nr, nc, player_num)
-                        d = (nx - cx_hit) * (nx - cx_hit) + (ny - cy_hit) * (ny - cy_hit)
-                        if d < best_dist:
-                            best_dist = d
+                        d_pos2 = (nx - cx_hit) * (nx - cx_hit) + (ny - cy_hit) * (ny - cy_hit)
+                        if preferred_target is not None:
+                            tr, tc = preferred_target
+                            tx, ty = self._grid_to_screen(tr, tc, player_num)
+                            d_tar2 = (nx - tx) * (nx - tx) + (ny - ty) * (ny - ty)
+                        else:
+                            d_tar2 = 0.0
+                        score = d_tar2 + 0.1 * d_pos2
+                        if score < best_score:
+                            best_score = score
                             best = (nr, nc)
                     if best is not None:
                         return best, path_points, bounce_points
@@ -1085,18 +1228,35 @@ class TargetBubbleShooterEnv:
             print(f"WIN: Grid cleared! Episode ending naturally.")
             return self.get_state(player_num), 0.0, True, False  # No win reward
         
-        # NEW: Bubble-target action system
-        # target_action_idx: 0-699 representing grid positions; we mask to occupied bubble cells
+        # NEW: Empty-cell target action system
+        # target_action_idx: 0-699 representing grid positions; we mask to reachable empty cells
         target_row = target_action_idx // GRID_COLS
         target_col = target_action_idx % GRID_COLS
         
-        # Validate that target refers to an existing bubble and is in direct LOS
-        reachable_direct = self.get_reachable_bubble_targets(player_num)
-        if (target_row, target_col) not in self.grid_player2 or (target_row, target_col) not in reachable_direct:
-            if reachable_direct:
-                target_row, target_col = reachable_direct[0]
+        # Validate that target is an empty cell, valid placement, and in direct LOS
+        reachable_empty = self.get_reachable_empty_targets(player_num)
+        if (target_row, target_col) in self.grid_player2 or (target_row, target_col) not in reachable_empty:
+            if reachable_empty:
+                # Choose the reachable cell closest to the originally intended (row,col),
+                # instead of defaulting to the first (which biases top row)
+                intended_rc = (target_row, target_col)
+                best_rc = None
+                best_d2 = 1e18
+                # Use screen-space distance for consistency with aiming
+                tx, ty = self._grid_to_screen(intended_rc[0], intended_rc[1], player_num)
+                for rr, cc in reachable_empty:
+                    rx, ry = self._grid_to_screen(rr, cc, player_num)
+                    d2 = (rx - tx) * (rx - tx) + (ry - ty) * (ry - ty)
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_rc = (rr, cc)
+                if best_rc is not None:
+                    target_row, target_col = best_rc
+                else:
+                    # Fallback to first as last resort
+                    target_row, target_col = reachable_empty[0]
             else:
-                # No direct-LOS bubbles: no-op step
+                # No direct-LOS targets: no-op step
                 return self.get_state(player_num), 0.0, False, False
         
         # Get shooter position (match game exactly: right shooter at SCREEN_WIDTH - 2*BUBBLE_RADIUS)
@@ -1109,69 +1269,63 @@ class TargetBubbleShooterEnv:
         # Calculate angle to hit target: prefer direct LOS, fallback to deterministic bounce (try both walls)
         # Direct-LOS-only: compute direct angle
         angle = calculate_angle_to_target(shooter_x, shooter_y, target_x, target_y)
-        # Nudge rule: if target is above shooter (target_y < shooter_y), aim slightly higher;
-        # if target is below shooter (target_y > shooter_y), aim slightly lower.
-        try:
-            rad = math.radians(angle)
-            bump_deg = 3.0 * abs(math.sin(rad))  # magnitude scales with verticality (max ~3°)
-            if 90.0 <= angle <= 270.0:
-                if target_y < shooter_y:
-                    # Upward shot -> decrease angle toward 90° (higher)
-                    angle -= bump_deg
-                else:
-                    # Downward shot -> increase angle toward 270° (lower)
-                    angle += bump_deg
-                # Clamp to right-shooter range
-                if angle < 90.0:
-                    angle = 90.0
-                elif angle > 270.0:
-                    angle = 270.0
-        except Exception:
-            pass
-
-        # Refine angle slightly to avoid near-collisions that cause unintended snapping
+        # Refine toward intended cell using preferred_target-aware simulation
         angle = self._refine_angle_to_hit_target(angle, player_num, shooter_x, shooter_y, target_row, target_col)
-        
-        # Determine landing cell deterministically: choose an empty valid neighbor on the shooter-facing side
-        # Compute a small front-point in the direction from target toward shooter to bias snapping in front, not behind
-        tx, ty = target_x, target_y
-        dir_x = shooter_x - tx
-        dir_y = shooter_y - ty
-        norm = max((dir_x*dir_x + dir_y*dir_y) ** 0.5, 1e-6)
-        ux, uy = dir_x / norm, dir_y / norm
-        front_x = tx + ux * 2 * 20  # 2*BUBBLE_RADIUS in front toward shooter
-        front_y = ty + uy * 2 * 20
 
-        landing = None
-        best_err = 1e9
-        for (nr, nc) in self._neighbors(target_row, target_col):
-            if nr < 0 or nr >= GRID_ROWS or nc < 0 or nc >= GRID_COLS:
-                continue
-            if (nr, nc) in self.grid_player2:
-                continue
-            if not self.is_valid_placement(nr, nc, self.grid_player2):
-                continue
-            nx, ny = self._grid_to_screen(nr, nc, player_num)
-            # Shooter-facing filter: vector from target to neighbor should have positive dot with (ux,uy)
-            vnx, vny = nx - tx, ny - ty
-            if (vnx * ux + vny * uy) <= 0:
-                continue
-            # Minimize distance to front-point to prefer the cell in front of the target
-            err = (nx - front_x) * (nx - front_x) + (ny - front_y) * (ny - front_y)
-            if err < best_err:
-                best_err = err
-                landing = (nr, nc)
-        if landing is None:
-            # No valid neighbor to snap to; skip action
-            return self.get_state(player_num), 0.0, False, False
+        # Pre-shot simulation & bump disabled when bounces are off
+        if AI_ENABLE_BOUNCE:
+            try:
+                rx = shooter_x + math.cos(math.radians(angle)) * 2000.0
+                ry = shooter_y + math.sin(math.radians(angle)) * 2000.0
+                landing, _, _ = self._simulate_shot_with_bounce(player_num, shooter_x, shooter_y, rx, ry, preferred_target=(target_row, target_col))
+                
+                # Check if simulation failed to hit target
+                if landing is None or landing[0] != target_row or landing[1] != target_col:
+                    # Simulation failed - apply bump based on verticality
+                    rad = math.radians(angle)
+                    bump_deg = 6.0 * abs(math.sin(rad))
+                    bump_sign = 0.0
+                    if 90.0 <= angle <= 270.0:
+                        if target_y < shooter_y:
+                            bump_sign = +1.0
+                        else:
+                            bump_sign = -1.0
+                    
+                    # Apply bump and retry simulation (up to 2 tries)
+                    tries = 2
+                    while tries > 0 and bump_sign != 0.0:
+                        angle += bump_sign * bump_deg
+                        if angle < 90.0:
+                            angle = 90.0
+                        elif angle > 270.0:
+                            angle = 270.0
+                        
+                        rx = shooter_x + math.cos(math.radians(angle)) * 2000.0
+                        ry = shooter_y + math.sin(math.radians(angle)) * 2000.0
+                        landing, _, _ = self._simulate_shot_with_bounce(player_num, shooter_x, shooter_y, rx, ry)
+                        
+                        # Check if we hit the target now
+                        if landing is not None and landing[0] == target_row and landing[1] == target_col:
+                            break
+                        
+                        tries -= 1
+            except Exception:
+                pass
         
-        # Check if the shot actually reached the intended target
+        # Determine landing cell: directly the chosen empty cell
         intended_target = (target_row, target_col)
-        if landing != intended_target:
-            # Debug output disabled for cleaner training logs
-            pass
-        
-            target_row, target_col = landing
+
+        # DEBUG: Predict landing for HUD. With bounces disabled, reflect intended placement
+        if not AI_ENABLE_BOUNCE:
+            self._dbg_landing_rc = intended_target
+        else:
+            try:
+                rx = shooter_x + math.cos(math.radians(angle)) * 2000.0
+                ry = shooter_y + math.sin(math.radians(angle)) * 2000.0
+                dbg_landing, _, _ = self._simulate_shot_with_bounce(player_num, shooter_x, shooter_y, rx, ry)
+                self._dbg_landing_rc = dbg_landing
+            except Exception:
+                self._dbg_landing_rc = None
         
         # Debug render if enabled (no path/bounce points now)
         if self.debug_render:
@@ -1481,7 +1635,7 @@ def train_target_dqn(num_steps=1_000, save_path='target_bubbles_dqn_model.pth', 
     current_window_env_scores = [0] * num_envs  # Running total for each environment in current window
     
     # Create multiple environments for parallel experience collection (ONCE, outside episode loop)
-    enable_debug = False  # Disable debug rendering for faster training
+    enable_debug = False  # Disable debug rendering for training speed
     envs = [
             TargetBubbleShooterEnv(
             debug_render=(i == 0 and enable_debug),  # Only first environment shows debug
@@ -1513,8 +1667,8 @@ def train_target_dqn(num_steps=1_000, save_path='target_bubbles_dqn_model.pth', 
         
         for i, (env, is_active) in enumerate(zip(envs, active_envs)):
             if is_active:
-                # Get reachable targets (positions) for aiming (hybrid masking)
-                reachable_targets = env.get_hybrid_masked_targets(2)
+                # Get reachable targets (positions) among empty cells
+                reachable_targets = env.get_hybrid_masked_targets(2) if AI_ENABLE_BOUNCE else env.get_reachable_empty_targets(2)
                 
                 # If no targets reachable, let AI shoot randomly (will lose anyway)
                 if not reachable_targets:
@@ -1522,39 +1676,23 @@ def train_target_dqn(num_steps=1_000, save_path='target_bubbles_dqn_model.pth', 
                     # This prevents training from getting stuck
                     reachable_targets = []  # Empty list triggers random shooting
                 
-                # AI chooses a target action (0-699) based on color analysis
-                # If no valid targets, agent.select_action will handle random shooting
+                # AI chooses a target action (0-699)
                 target_action = agent.select_action(states[i], reachable_targets, training_mode=True)
+                # Capture diagnostics for HUD on the environment instance
+                try:
+                    env._agent_rand = bool(agent.last_selection_random)
+                    env._agent_eps = float(agent.last_epsilon)
+                    env._agent_act = int(agent.last_selected_action) if agent.last_selected_action is not None else -1
+                except Exception:
+                    env._agent_rand = False
+                    env._agent_eps = -1.0
+                    env._agent_act = -1
                 
                 valid_targets.append(reachable_targets)
                 actions.append(target_action)
                 active_indices.append(i)
             
-            # AI player (player 2) actions - only for active environments
-            # NEW: Target-based action system based on color analysis
-            # AI gets random colored bubble, then chooses which target to shoot at
-            valid_targets = []
-            actions = []
-            active_indices = []
-            
-            for i, (env, is_active) in enumerate(zip(envs, active_envs)):
-                if is_active:
-                    # Get reachable targets (positions) for aiming (direct LOS only)
-                    reachable_targets = env.get_reachable_bubble_targets(2)
-                    
-                    # If no targets reachable, let AI shoot randomly (will lose anyway)
-                    if not reachable_targets:
-                        # No valid targets - AI will shoot randomly and lose
-                        # This prevents training from getting stuck
-                        reachable_targets = []  # Empty list triggers random shooting
-                    
-                    # AI chooses a target action (0-699) based on color analysis
-                    # If no valid targets, agent.select_action will handle random shooting
-                    target_action = agent.select_action(states[i], reachable_targets, training_mode=True)
-                    
-                    valid_targets.append(reachable_targets)
-                    actions.append(target_action)
-                    active_indices.append(i)
+            # NOTE: removed legacy duplicate action block that overwrote empty-cell targets with bubble targets
             
             # Step all active environments for AI player
             for idx, (env_idx, target_action) in enumerate(zip(active_indices, actions)):
