@@ -667,7 +667,7 @@ def check_angular_los_occlusion(
 
     # Exempt the last small portion near the target to allow snapping
     # when the center path is already inside the neighborhood of the target.
-    end_exempt_fraction = 0.06  # last 6% of the path
+    end_exempt_fraction = 0.12  # widen exemption near target to reduce false blocks
 
     # Segment A(shooter) -> B(target)
     bx, by = grid_to_screen(target_row, target_col, player_num, center_line_offset)
@@ -710,7 +710,7 @@ def get_angular_los_filtered_targets(
     Filter candidate targets by removing those occluded angularly by closer bubbles.
     """
     if corridor_width is None:
-        corridor_width = 0.85 * BUBBLE_RADIUS
+        corridor_width = 0.75 * BUBBLE_RADIUS  # slightly narrower to avoid over-blocking
     result: List[Tuple[int, int]] = []
     for r, c in candidate_targets:
         if not check_angular_los_occlusion(
