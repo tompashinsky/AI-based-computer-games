@@ -29,6 +29,10 @@ screen.fill(WHITE)
 wooden_background = pygame.image.load("wood_background.png").convert()
 wooden_background = pygame.transform.scale(wooden_background, (WIDTH, HEIGHT))
 
+# Load sound effects
+victory_sound = pygame.mixer.Sound("goodresult-82807.mp3")
+lose_sound = pygame.mixer.Sound("losing-horn-313723.mp3")
+
 # Initialize MCTS AI
 ai = MCTS(iterations=1500)
 ai.load_knowledge()
@@ -169,6 +173,8 @@ def display_scores():
 
 def display_winner_message(player, result, human_symbol):
     global player_x_score, player_o_score
+
+    # Update score
     if result == 1:
         if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2):
             player_x_score += 1
@@ -179,33 +185,66 @@ def display_winner_message(player, result, human_symbol):
     if player == 2:  # If AI was playing
         ai.record_game_result(1 if result == 1 else 0)
 
-    pygame.draw.rect(screen, (200, 200, 200), pygame.Rect(0, HEIGHT // 3, WIDTH, HEIGHT // 3))
-    font = pygame.font.Font(None, 74)
+    # --- Stylish overlay ---
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.set_alpha(180)   # semi-transparent
+    overlay.fill((0, 0, 0))  # dark background
+    screen.blit(overlay, (0, 0))
+
+    # Winner / draw text
+    font = pygame.font.Font(None, 90)
     if result == 0:
-        text = font.render("It's a draw!", True, RED)
+        text = font.render("It's a Draw!", True, (255, 215, 0))  # Gold
     else:
         winner = "Human" if player == 1 else "AI"
         symbol = "X" if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2) else "O"
-        text = font.render(f"{winner} ({symbol}) wins!", True, RED)
-    screen.blit(text, text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
+        text = font.render(f"{winner} ({symbol}) Wins!", True, (0, 150, 255))  # Blue
+        if winner == 'Human':
+            victory_sound.play()
+        else:
+            lose_sound.play()
+    screen.blit(text, text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 100)))
+
+    # Show scores
+    score_font = pygame.font.Font(None, 60)
+    score_text = score_font.render(f"Score: X = {player_x_score} | O = {player_o_score}", True, (255, 255, 255))
+    screen.blit(score_text, score_text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30)))
+
+    # Button rectangles
+    restart_rect = pygame.Rect(WIDTH // 2 - 220, HEIGHT // 2 + 60, 180, 60)
+    quit_rect = pygame.Rect(WIDTH // 2 + 40, HEIGHT // 2 + 60, 180, 60)
 
     button_font = pygame.font.Font(None, 50)
-    restart_text = button_font.render("Restart", True, BLACK)
-    restart_rect = pygame.Rect(WIDTH // 2 - 220, HEIGHT // 2 + 20, 180, 60)
-    pygame.draw.rect(screen, WHITE, restart_rect)
-    pygame.draw.rect(screen, BLACK, restart_rect, 3)
-    screen.blit(restart_text, restart_text.get_rect(center=restart_rect.center))
 
-    quit_text = button_font.render("Quit", True, BLACK)
-    quit_rect = pygame.Rect(WIDTH // 2 + 40, HEIGHT // 2 + 20, 180, 60)
-    pygame.draw.rect(screen, WHITE, quit_rect)
-    pygame.draw.rect(screen, BLACK, quit_rect, 3)
-    screen.blit(quit_text, quit_text.get_rect(center=quit_rect.center))
+    running = True
+    while running:
+        mouse_pos = pygame.mouse.get_pos()
 
-    display_scores()
-    pygame.display.update()
+        # Restart button (hover effect)
+        if restart_rect.collidepoint(mouse_pos):
+            pygame.draw.rect(screen, (255, 255, 255), restart_rect, border_radius=12)
+            pygame.draw.rect(screen, (200, 200, 200), restart_rect, 3, border_radius=12)
+            restart_text = button_font.render("Restart", True, (0, 0, 0))
+        else:
+            pygame.draw.rect(screen, (50, 50, 50), restart_rect, border_radius=12)
+            pygame.draw.rect(screen, (200, 200, 200), restart_rect, 3, border_radius=12)
+            restart_text = button_font.render("Restart", True, (255, 255, 255))
+        screen.blit(restart_text, restart_text.get_rect(center=restart_rect.center))
 
-    while True:
+        # Quit button (hover effect)
+        if quit_rect.collidepoint(mouse_pos):
+            pygame.draw.rect(screen, (255, 255, 255), quit_rect, border_radius=12)
+            pygame.draw.rect(screen, (200, 200, 200), quit_rect, 3, border_radius=12)
+            quit_text = button_font.render("Quit", True, (0, 0, 0))
+        else:
+            pygame.draw.rect(screen, (50, 50, 50), quit_rect, border_radius=12)
+            pygame.draw.rect(screen, (200, 200, 200), quit_rect, 3, border_radius=12)
+            quit_text = button_font.render("Quit", True, (255, 255, 255))
+        screen.blit(quit_text, quit_text.get_rect(center=quit_rect.center))
+
+        pygame.display.update()
+
+        # Event handling
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -217,6 +256,7 @@ def display_winner_message(player, result, human_symbol):
                     return
                 elif quit_rect.collidepoint(mouseX, mouseY):
                     return "back_to_menu"
+
 
 
 def is_board_full():
