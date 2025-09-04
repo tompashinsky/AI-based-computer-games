@@ -14,7 +14,7 @@ WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 YELLOW = (255, 255, 0)
 FPS = 60
-GAME_DURATION = 10
+GAME_DURATION = 180
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Head Soccer with NN AI")
@@ -47,6 +47,7 @@ goal_img = pygame.transform.scale(goal_img, (80, 200))
 
 goal_sound = pygame.mixer.Sound("goal_sound.mp3")
 whistle_sound = pygame.mixer.Sound("whistle_sound.mp3")
+ending_whistle_sound = pygame.mixer.Sound("zapsplat_sport_whistle_soccer_full_time_002_76140.mp3")
 kick_sound = pygame.mixer.Sound("kick_sound.mp3")
 
 ACTIONS = ['left', 'right', 'jump', 'kick', 'stay']
@@ -442,6 +443,7 @@ def run_head_soccer():
         if remaining <= 0:
             running = False
 
+    ending_whistle_sound.play()
     result = show_game_over_screen(score1, score2)
     if result != "restart":
         return result

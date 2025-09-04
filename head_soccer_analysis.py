@@ -382,7 +382,6 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
     target_net = QNet().to(device)
     target_net.load_state_dict(net.state_dict())
 
-    # Opponent network starts as a copy, refreshed periodically
     opponent_net = QNet().to(device)
     opponent_net.load_state_dict(net.state_dict())
     opponent_agent = FrozenAgent(opponent_net, device)
@@ -394,12 +393,20 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
     epsilon = 1.0
     epsilon_decay = 0.9975
     epsilon_min = 0.01
-    sync_target_every = 1000  # episodes
+    sync_target_every = 1000
+
+    # --- Tracking lists ---
     rewards_per_ep = []
+    losses_per_ep = []
+    qvals_per_ep = []
+    winrates_per_ep = []
 
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
+        ep_losses = []
+        ep_qvals = []
+        ai_goals, opp_goals = 0, 0
 
         for t in range(300):
             # ε-greedy action
@@ -410,9 +417,15 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                     state_tensor = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
                     q_values = net(state_tensor)
                     action = int(q_values.argmax().item())
+                    ep_qvals.append(q_values.max().item())
 
-            # Step with self-play opponent
             next_state, reward, done = env.step(action, opponent_agent)
+
+            # track goals for win rate
+            if reward == 5:
+                ai_goals += 1
+            elif reward == -5:
+                opp_goals += 1
 
             if render:
                 for event in pygame.event.get():
@@ -420,7 +433,7 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                         pygame.quit()
                         return
                 draw_env(env)
-                clock.tick(60)  # Slow down so you can watch
+                clock.tick(60)
 
             buffer.push((state, action, reward, next_state, done))
             state = next_state
@@ -435,7 +448,6 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                 actions = torch.tensor(actions, dtype=torch.long, device=device).unsqueeze(1)
                 rewards = torch.tensor(rewards, dtype=torch.float32, device=device).unsqueeze(1)
                 next_states = torch.tensor(next_states, dtype=torch.float32, device=device)
-                # Cast dones to float for (1 - dones)
                 dones = torch.tensor(dones, dtype=torch.float32, device=device).unsqueeze(1)
 
                 q_vals = net(states).gather(1, actions)
@@ -446,43 +458,85 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                 loss = nn.MSELoss()(q_vals, targets)
                 optimizer.zero_grad()
                 loss.backward()
-                # gradient clipping for stability
                 nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
+
+                ep_losses.append(loss.item())
 
             if done:
                 break
 
-        # Hard target update every N episodes
+        # target network update
         if episode % sync_target_every == 0:
             target_net.load_state_dict(net.state_dict())
 
-        # Refresh the frozen opponent every K episodes (play vs recent self)
+        # opponent refresh
         if episode % opponent_refresh == 0 and episode > 0:
             opponent_net.load_state_dict(net.state_dict())
             print(f"[Self-Play] Opponent updated at episode {episode}")
 
         epsilon = max(epsilon_min, epsilon * epsilon_decay)
+
+        # --- Logging per episode ---
         rewards_per_ep.append(total_reward)
+        losses_per_ep.append(np.mean(ep_losses) if ep_losses else 0)
+        qvals_per_ep.append(np.mean(ep_qvals) if ep_qvals else 0)
+        winrates_per_ep.append(1 if ai_goals > opp_goals else 0)
 
         if episode % 100 == 0 and episode > 0:
             avg_last_100 = np.mean(rewards_per_ep[-100:])
-            print(f"Episode {episode}: avg_reward(last 100) = {avg_last_100:.2f}, epsilon = {epsilon:.3f}")
+            print(f"Episode {episode}: avg_reward(last 100) = {avg_last_100:.2f}")
 
-    # Smooth rewards with a 100-episode moving average
-    window = 100
-    if len(rewards_per_ep) >= window:
-        smoothed_rewards = np.convolve(rewards_per_ep, np.ones(window) / window, mode='valid')
-        plt.plot(smoothed_rewards)
-        plt.title(f"Training Rewards ({window}-episode moving average)")
-        plt.xlabel("Episode")
-        plt.ylabel("Average Reward")
-        plt.show()
+    # --- Plotting with multiple y-axes ---
+    def smooth(data, w=100):
+        return np.convolve(data, np.ones(w)/w, mode="valid")
+
+    rewards_s = smooth(rewards_per_ep)
+    losses_s = smooth(losses_per_ep)
+    qvals_s = smooth(qvals_per_ep)
+    wins_s = smooth(winrates_per_ep)
+
+    fig, ax1 = plt.subplots(figsize=(12,6))
+
+    # Rewards
+    ax1.plot(rewards_s, label="Reward (avg)", color="blue")
+    ax1.plot(wins_s, label="Win Rate", color="green", linestyle="--")
+    ax1.set_xlabel("Episode")
+    ax1.set_ylabel("Reward / Win Rate", color="blue")
+    ax1.tick_params(axis="y", labelcolor="blue")
+
+    # Loss
+    ax2 = ax1.twinx()
+    ax2.plot(losses_s, label="Loss", color="red", alpha=0.6)
+    ax2.set_ylabel("Loss", color="red")
+    ax2.tick_params(axis="y", labelcolor="red")
+
+    # Q-values
+    ax3 = ax1.twinx()
+    ax3.spines.right.set_position(("axes", 1.1))  # shift right
+    ax3.plot(qvals_s, label="Q-values", color="purple", alpha=0.6)
+    ax3.set_ylabel("Q-values", color="purple")
+    ax3.tick_params(axis="y", labelcolor="purple")
+
+    fig.suptitle("DQN Training Metrics (100-episode moving average)", fontsize=14)
+
+    # Combined legend
+    lines = ax1.get_lines() + ax2.get_lines() + ax3.get_lines()
+    labels = [line.get_label() for line in lines]
+    ax1.legend(lines, labels, loc="upper left")
+
+    plt.tight_layout()
+    plt.show()
+
+    # save model
+    torch.save(net.state_dict(), "analysis_nn_model.pth")
+
 
     # Save the trained model
-    torch.save(net.state_dict(), "nn_model.pth")
+    torch.save(net.state_dict(), "analysis_nn_model.pth")
 
 
 # Run training
 if __name__ == "__main__":
     train_dqn(episodes=5000, render=False, opponent_refresh=200)
+#
