@@ -17,7 +17,7 @@ FPS = 60
 GAME_DURATION = 180
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Head Soccer with NN AI")
+pygame.display.set_caption("Head Soccer")
 clock = pygame.time.Clock()
 
 # Load graphics

@@ -118,25 +118,29 @@ def main_menu():
 
         button_1 = pygame.Rect(150, 360, 200, 50)
         button_2 = pygame.Rect(470, 360, 200, 50)
-        button_3 = pygame.Rect(150, 460, 200, 50)
-        button_4 = pygame.Rect(470, 460, 200, 50)
+        button_3 = pygame.Rect(310, 460, 200, 50)
 
         if button_1.collidepoint((mx, my)) and is_clicked:
             return "tic_tac_toe"
         elif button_2.collidepoint((mx, my)) and is_clicked:
             return "head_soccer"
 
-        # --- Buttons (dark navy with neon cyan border) ---
-        button_color = (20, 30, 60)
-        border_color = (0, 200, 255)
-        for button in [button_1, button_2, button_3, button_4]:
-            pygame.draw.rect(screen, button_color, button, border_radius=12)
-            pygame.draw.rect(screen, border_color, button, 3, border_radius=12)
-
-        draw_text('Tic Tac Toe', font, (200, 255, 255), screen, 250, 385)
-        draw_text('Head Soccer', font, (200, 255, 255), screen, 570, 385)
-        draw_text('Checkers', font, (200, 255, 255), screen, 250, 485)
-        draw_text('Bubbles', font, (200, 255, 255), screen, 570, 485)
+        # --- Buttons (with hover effect) ---
+        for button, label, cx, cy in [
+            (button_1, "Tic Tac Toe", 250, 385),
+            (button_2, "Head Soccer", 570, 385),
+            (button_3, "Bubbles", 410, 485),
+        ]:
+            if button.collidepoint((mx, my)):
+                # Hovered button: brighter background + dark text
+                pygame.draw.rect(screen, (255, 255, 255), button, border_radius=12)
+                pygame.draw.rect(screen, (200, 200, 200), button, 3, border_radius=12)
+                draw_text(label, font, (0, 0, 0), screen, cx, cy)
+            else:
+                # Normal state
+                pygame.draw.rect(screen, (20, 30, 60), button, border_radius=12)
+                pygame.draw.rect(screen, (0, 200, 255), button, 3, border_radius=12)
+                draw_text(label, font, (200, 255, 255), screen, cx, cy)
 
         is_clicked = False
         for event in pygame.event.get():
@@ -149,6 +153,7 @@ def main_menu():
 
         pygame.display.update()
         mainClock.tick(60)
+
 
 
 def game_controller():

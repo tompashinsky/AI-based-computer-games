@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import time
 
 # Environment Constants
 WIDTH = 800
@@ -373,9 +374,8 @@ class FrozenAgent:
 
 
 # Training DQN (with self-play vs frozen past self)
-def train_dqn(episodes=1000, render=False, opponent_refresh=500):
+def train_dqn(episodes=5000, render=False, opponent_refresh=200):
     env = HeadSoccerEnv()
-
     device = torch.device("cpu")
 
     net = QNet().to(device)
@@ -395,17 +395,15 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
     epsilon_min = 0.01
     sync_target_every = 1000
 
+    global_step = 0
+
     # --- Tracking lists ---
     rewards_per_ep = []
-    losses_per_ep = []
-    qvals_per_ep = []
     winrates_per_ep = []
 
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
-        ep_losses = []
-        ep_qvals = []
         ai_goals, opp_goals = 0, 0
 
         for t in range(300):
@@ -417,7 +415,6 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                     state_tensor = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
                     q_values = net(state_tensor)
                     action = int(q_values.argmax().item())
-                    ep_qvals.append(q_values.max().item())
 
             next_state, reward, done = env.step(action, opponent_agent)
 
@@ -438,6 +435,7 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
             buffer.push((state, action, reward, next_state, done))
             state = next_state
             total_reward += reward
+            global_step+=1
 
             # Learn
             if len(buffer.buffer) >= batch_size:
@@ -461,14 +459,11 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
                 nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-                ep_losses.append(loss.item())
+            if global_step % sync_target_every == 0:
+                target_net.load_state_dict(net.state_dict())
 
             if done:
                 break
-
-        # target network update
-        if episode % sync_target_every == 0:
-            target_net.load_state_dict(net.state_dict())
 
         # opponent refresh
         if episode % opponent_refresh == 0 and episode > 0:
@@ -479,64 +474,150 @@ def train_dqn(episodes=1000, render=False, opponent_refresh=500):
 
         # --- Logging per episode ---
         rewards_per_ep.append(total_reward)
-        losses_per_ep.append(np.mean(ep_losses) if ep_losses else 0)
-        qvals_per_ep.append(np.mean(ep_qvals) if ep_qvals else 0)
         winrates_per_ep.append(1 if ai_goals > opp_goals else 0)
 
         if episode % 100 == 0 and episode > 0:
             avg_last_100 = np.mean(rewards_per_ep[-100:])
             print(f"Episode {episode}: avg_reward(last 100) = {avg_last_100:.2f}")
 
-    # --- Plotting with multiple y-axes ---
+    # --- Plotting ---
     def smooth(data, w=100):
         return np.convolve(data, np.ones(w)/w, mode="valid")
 
     rewards_s = smooth(rewards_per_ep)
-    losses_s = smooth(losses_per_ep)
-    qvals_s = smooth(qvals_per_ep)
     wins_s = smooth(winrates_per_ep)
 
-    fig, ax1 = plt.subplots(figsize=(12,6))
-
-    # Rewards
-    ax1.plot(rewards_s, label="Reward (avg)", color="blue")
-    ax1.plot(wins_s, label="Win Rate", color="green", linestyle="--")
-    ax1.set_xlabel("Episode")
-    ax1.set_ylabel("Reward / Win Rate", color="blue")
-    ax1.tick_params(axis="y", labelcolor="blue")
-
-    # Loss
-    ax2 = ax1.twinx()
-    ax2.plot(losses_s, label="Loss", color="red", alpha=0.6)
-    ax2.set_ylabel("Loss", color="red")
-    ax2.tick_params(axis="y", labelcolor="red")
-
-    # Q-values
-    ax3 = ax1.twinx()
-    ax3.spines.right.set_position(("axes", 1.1))  # shift right
-    ax3.plot(qvals_s, label="Q-values", color="purple", alpha=0.6)
-    ax3.set_ylabel("Q-values", color="purple")
-    ax3.tick_params(axis="y", labelcolor="purple")
-
-    fig.suptitle("DQN Training Metrics (100-episode moving average)", fontsize=14)
-
-    # Combined legend
-    lines = ax1.get_lines() + ax2.get_lines() + ax3.get_lines()
-    labels = [line.get_label() for line in lines]
-    ax1.legend(lines, labels, loc="upper left")
-
+    # Plot 1: Rewards
+    plt.figure(figsize=(12, 5))
+    plt.plot(rewards_s, color="blue", label="Reward (100-episode avg)")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.title("Training Rewards")
+    plt.legend()
     plt.tight_layout()
     plt.show()
 
-    # save model
-    torch.save(net.state_dict(), "analysis_nn_model.pth")
+    # Plot 2: Epsilon decay
+    epsilons = []
+    eps = 1.0
+    min_reached_at = None
 
+    for i in range(len(winrates_per_ep)):
+        eps = max(epsilon_min, eps * epsilon_decay)
+        epsilons.append(eps)
+        if eps == epsilon_min and min_reached_at is None:
+            min_reached_at = i  # first episode where epsilon hits minimum
+
+    plt.figure(figsize=(12, 5))
+    plt.plot(epsilons, label="Epsilon", color="orange")
+
+    # Add vertical line and annotation
+    if min_reached_at is not None:
+        plt.axvline(min_reached_at, color='red', linestyle='--', label=f"Epsilon Min @ Episode {min_reached_at}")
+        plt.text(min_reached_at + 10, epsilon_min + 0.05, f"ε = {epsilon_min}", color='red')
+
+    plt.xlabel("Episode")
+    plt.ylabel("Epsilon Value")
+    plt.title("Epsilon Decay Over Training Episodes")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
     # Save the trained model
-    torch.save(net.state_dict(), "analysis_nn_model.pth")
-
+    torch.save(net.state_dict(), "analysis2_nn_model.pth")
 
 # Run training
 if __name__ == "__main__":
     train_dqn(episodes=5000, render=False, opponent_refresh=200)
+
+
+def evaluate_and_plot_dual_opponents(model_path="nn_model.pth", episodes=100, render=False):
+    env = HeadSoccerEnv()
+    device = torch.device("cpu")
+
+    # Load trained model (AI agent)
+    net = QNet().to(device)
+    net.load_state_dict(torch.load(model_path, map_location=device))
+    net.eval()
+
+    clock = pygame.time.Clock()
+
+    # Define opponents
+    class RandomAgent:
+        def select_action(self, state, epsilon=0.0):
+            return np.random.randint(0, ACTION_SIZE)
+
+    random_agent = RandomAgent()
+    strategic_agent = FrozenAgent(net, device)
+
+    results = {
+        "Random": {"wins": 0, "losses": 0},
+        "Strategic": {"wins": 0, "losses": 0}
+    }
+
+    for label, opponent in [("Random", random_agent), ("Strategic", strategic_agent)]:
+        print(f"Evaluating vs {label} Opponent...")
+
+        for ep in range(episodes):
+            state = env.reset()
+            ai_goals, opp_goals = 0, 0
+            start_time = time.time()
+
+            while time.time() - start_time < 180:  # 3-minute match
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        return
+
+                with torch.no_grad():
+                    s = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+                    q_values = net(s)
+                    action = int(q_values.argmax().item())
+
+                next_state, reward, done = env.step(action, opponent)
+                state = next_state
+
+                if reward == 5:
+                    ai_goals += 1
+                elif reward == -5:
+                    opp_goals += 1
+
+                if render:
+                    draw_env(env)
+                    clock.tick(60)
+
+                if done:
+                    break
+
+            if ai_goals > opp_goals:
+                results[label]["wins"] += 1
+            elif ai_goals < opp_goals:
+                results[label]["losses"] += 1
+            # Draws are ignored
+
+    # Prepare data for plotting
+    labels = ["Random Opponent", "Strategic Opponent"]
+    win_rates = [results["Random"]["wins"] / episodes, results["Strategic"]["wins"] / episodes]
+    loss_rates = [results["Random"]["losses"] / episodes, results["Strategic"]["losses"] / episodes]
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.bar(x - width/2, win_rates, width, label='Win Rate', color='green')
+    ax.bar(x + width/2, loss_rates, width, label='Loss Rate', color='red')
+
+    ax.set_ylabel('Rate')
+    ax.set_title('AI Performance vs Opponents')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+'''if __name__ == "__main__":
+    evaluate_and_plot_dual_opponents("nn_model.pth", episodes=100, render=False)'''
+
 #

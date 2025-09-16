@@ -149,10 +149,10 @@ def check_win(player):
 def display_turn(player, human_symbol):
     turn_rect = pygame.Rect(30, 35, 270, 40)
     pygame.draw.rect(screen, (0, 175, 0), turn_rect, border_radius=10)
-    font = pygame.font.Font(None, 40)
-    current_player = "Human" if player == 1 else "AI"
+    font = pygame.font.Font(None, 35)
+    current_player = "Your" if player == 1 else "Opponent's"
     symbol = "X" if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2) else "O"
-    text = font.render(f"{current_player}'s Turn ({symbol})", True, WHITE)
+    text = font.render(f"{current_player} Turn ({symbol})", True, WHITE)
     text_rect = text.get_rect(center=turn_rect.center)
     screen.blit(text, text_rect)
 
@@ -198,7 +198,7 @@ def display_winner_message(player, result, human_symbol):
     else:
         winner = "Human" if player == 1 else "AI"
         symbol = "X" if (player == 1 and human_symbol == 1) or (player == 2 and human_symbol == 2) else "O"
-        text = font.render(f"{winner} ({symbol}) Wins!", True, (0, 150, 255))  # Blue
+        text = font.render(f"Player {symbol} Wins!", True, (0, 150, 255))  # Blue
         if winner == 'Human':
             victory_sound.play()
         else:
