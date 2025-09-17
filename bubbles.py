@@ -73,7 +73,7 @@ DQN_ACTION_SIZE = 700  # 700 actions (one per grid position)
 DQN_COLOR_ACTION_SIZE = 6  # Keep for backward compatibility during transition
 
 # Debug constants
-DEBUG_AI = True  # Enable AI debug overlays and console logs by default (toggle with 'D')
+DEBUG_AI = False  # Start with AI debug overlays OFF by default (toggle with 'D')
 # Temporary aiming config
 # When False, the AI will only consider direct line-of-sight targets and will not
 # attempt pre-shot bump adjustments that can leverage bounces.
@@ -693,11 +693,7 @@ class Game:
         if DEBUG_AI:
             self.draw_ai_debug_panel()
         
-        if self.game_over:
-            font = pygame.font.Font(None, 74)
-            text = font.render("Game Over!", True, (255, 255, 255))
-            text_rect = text.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
-            self.screen.blit(text, text_rect)
+        # Removed on-screen "Game Over!" message per request
         
         pygame.display.flip()
 
