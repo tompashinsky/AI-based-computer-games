@@ -223,8 +223,8 @@ def compute_enhanced_reward(prev_score, current_score, prev_grid, current_grid, 
     # Calculate bubbles popped in this action
     bubbles_popped = current_score - prev_score
     if bubbles_popped > 0:
-        # Increased base reward for popping bubbles
-        base_reward = bubbles_popped * 30.0  # Increased from 20.0 to 30.0 per bubble
+        # Increased base reward for popping bubbles (emphasize popping over matching)
+        base_reward = bubbles_popped * 50.0  # Increased from 30.0 to 50.0 per bubble
         
         # Balanced chain reaction bonus: moderate reward for multiple bubbles
         if bubbles_popped >= 3:
@@ -235,7 +235,7 @@ def compute_enhanced_reward(prev_score, current_score, prev_grid, current_grid, 
         
         # Additional bonus for large chains (5+ bubbles)
         if bubbles_popped >= 3:
-            reward += 40.0  # Increased from 30.0 to 40.0 for better balance
+            reward += 60.0  # Increased from 40.0 to 60.0 to further emphasize popping
         
         # Bonus for falling bubbles (strategic gameplay)
         # If we popped bubbles and the grid got smaller, some bubbles fell
@@ -1416,17 +1416,17 @@ class TargetBubbleShooterEnv:
                     if (nr, nc) in player_grid and player_grid[(nr, nc)] == current_bubble_color:
                         neighbor_matches += 1
             if neighbor_matches > 0:
-                # HIGHER reward for current bubble color matching to make it the primary strategy
-                reward += neighbor_matches * 25.0  # Increased from 15.0 to 25.0 for stronger color matching
+                # Balanced reward for color matching
+                reward += neighbor_matches * 8.0  # Keep match reward at 8.0
             else:
-                # Small penalty for not matching current bubble color
-                reward -= 5.0  # Encourage color matching
+                # Balanced penalty for not matching current bubble color (1.5:1 ratio)
+                reward -= 12.0  # Increased from 5.0 to 12.0 for better balance
                 # Additional small penalty for zero neighbor_same_color_counts feature at landing
                 from bubble_geometry import neighbor_same_color_counts
                 ncounts = neighbor_same_color_counts(player_grid, current_bubble_color)
                 idx = target_row * GRID_COLS + target_col
                 if 0 <= idx < ncounts.shape[0] and ncounts[idx] <= 0.0:
-                    reward -= 1.0
+                    reward -= 2.0  # Reduced from 1.0 to 2.0 for balance
                 # No verbose print for no-match to reduce noise
         
         return self.get_state(player_num), reward, self.done, self.lost[player_num]
@@ -1497,6 +1497,15 @@ class TargetBubbleShooterEnv:
             if (0, col) in player_grid:
                 to_check.append((0, col))
                 connected_to_top.add((0, col))
+
+        # NEW: Also treat bubbles adjacent to the middle vertical line (col == 0)
+        # as anchored seeds, but only for rows that actually touch the center
+        # in the honeycomb layout (even rows).
+        for row in range(GRID_ROWS):
+            if row % 2 == 0:
+                if (row, 0) in player_grid and (row, 0) not in connected_to_top:
+                    to_check.append((row, 0))
+                    connected_to_top.add((row, 0))
         
         # Breadth-first search to find all connected bubbles
         while to_check:

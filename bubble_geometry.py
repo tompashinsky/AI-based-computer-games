@@ -45,7 +45,7 @@ BUBBLE_COLORS = [
 BUBBLE_COLORS_COUNT = len(BUBBLE_COLORS)
 LOSE_THRESHOLD = 100
 CENTER_LINE_PUSH_AMOUNT = 6
-MAX_CENTER_LINE_OFFSET = 200
+MAX_CENTER_LINE_OFFSET = 500  # Allow deeper push so AI can win even if human never shoots
 
 # ============================================================================
 # GRID TO SCREEN COORDINATE MAPPING
@@ -586,7 +586,6 @@ def encode_compact_state_consistent(
 ) -> np.ndarray:
     """
     Clean, focused state encoding with only essential information.
-    FIXED: Only include CURRENT bubble color to avoid confusion with the next bubble.
 
     Args:
         grid: Current grid state {(row, col): color}

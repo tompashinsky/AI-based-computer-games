@@ -1,4 +1,5 @@
 import pygame
+import os
 import sys
 import random
 import math
@@ -9,6 +10,8 @@ import numpy as np
 
 # Initialize Pygame
 pygame.init()
+pygame.event.clear()
+
 
 # Next Bubble Preview Feature:
 # Both human and AI players can see their next bubble color, allowing for strategic planning.
@@ -57,7 +60,7 @@ PLAYER_TWO_COLOR = (0, 0, 255)  # Blue
 MIDDLE_LINE_WIDTH = 4  # Thicker middle line
 LOSING_THRESHOLD_ROW = 10  # Row at which a player loses
 LOSING_THRESHOLD_COL = 5  # Column at which a player loses
-LOSING_LINE_COLOR = (255, 0, 0, 128)  # Semi-transparent red
+LOSING_LINE_COLOR = (255, 255, 255)  # White for better visibility on dark bg
 
 # Add these constants for Target-based DQN
 DQN_MODEL_PATH = 'target_bubbles_dqn_model.pth'
@@ -89,8 +92,25 @@ class Bubble:
         self.grid_pos = None  # Will store (row, col, player) position in the grid
         self.bounce_count = 0  # Track number of wall bounces
         self.shot_by_player = None  # Track which player shot this bubble
+        self.move_frames = 0  # Frames moved while is_moving
 
     def draw(self, screen: pygame.Surface):
+        try:
+            # Expect Game to have cached images by RGB color
+            from pygame import Rect  # local import ok
+            img = getattr(Bubble, "_image_cache", {}).get(self.color)
+            if img is None and hasattr(Bubble, "_image_provider") and Bubble._image_provider is not None:
+                img = Bubble._image_provider(self.color)
+                if getattr(Bubble, "_image_cache", None) is None:
+                    Bubble._image_cache = {}
+                Bubble._image_cache[self.color] = img
+            if img is not None:
+                rect = img.get_rect(center=(int(self.x), int(self.y)))
+                screen.blit(img, rect)
+                return
+        except Exception:
+            pass
+        # Fallback to vector circle if no image available
         pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
         pygame.draw.circle(screen, (255, 255, 255), (int(self.x), int(self.y)), self.radius, 2)
 
@@ -98,6 +118,7 @@ class Bubble:
         if self.is_moving and not self.snapped:
             self.x += self.velocity_x
             self.y += self.velocity_y
+            self.move_frames += 1
 
     def check_wall_collision(self):
         if self.y - self.radius <= 0 or self.y + self.radius >= SCREEN_HEIGHT:
@@ -130,6 +151,23 @@ class Game:
         self.initialize_grid()
         self.initialize_bubbles()
         self.initialize_shooters()
+        # Load bubble assets
+        self._load_bubble_assets()
+        # Load background
+        try:
+            bg_path = os.path.join("assets", "backgrounds", "Blue_Nebula.png")
+            bg_img = pygame.image.load(bg_path).convert()
+            self.background_image = pygame.transform.smoothscale(bg_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
+        except Exception:
+            self.background_image = None
+        
+        # Load sound effects
+        try:
+            sound_path = os.path.join("assets", "sounds", "bubble_boop.wav")
+            self.shoot_sound = pygame.mixer.Sound(sound_path)
+        except Exception as e:
+            print(f"Warning: Could not load shoot sound {sound_path}: {e}")
+            self.shoot_sound = None
         # Target-based DQN agent for right-side AI
         self.dqn_agent = TargetDQNAgent(DQN_STATE_SIZE, DQN_ACTION_SIZE, device='cpu')
         try:
@@ -142,6 +180,16 @@ class Game:
             print(f"Error loading AI model: {e}")
             print("AI will play with random actions.")
         self.ai_action_cooldown = 0  # Frames until next AI action
+        # Queue clicks so human shot fires ASAP when ready
+        self._pending_shot_p1 = False
+        # Track how long a human shot has been blocked by a moving human bubble
+        self._p1_block_frames = 0
+        # Input tracking removed: rely on MOUSEBUTTONDOWN only to avoid double fires
+        # Ensure mouse button events are allowed (avoid accidental filtering)
+        try:
+            pygame.event.set_allowed(None)
+        except Exception:
+            pass
 
     def initialize_grid(self):
         # Calculate the starting position for both players' grids using shared geometry
@@ -194,6 +242,58 @@ class Game:
         }
         self.update_shooters()
 
+    def _create_circle_surface(self, diameter: int, color: tuple) -> pygame.Surface:
+        surf = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+        r = diameter // 2
+        pygame.draw.circle(surf, color, (r, r), r)
+        pygame.draw.circle(surf, (255, 255, 255), (r, r), r, 2)
+        return surf
+
+    def _load_bubble_assets(self):
+        # Map color indices (0..5) to filenames by convention
+        color_names = ["red", "green", "blue", "yellow", "magenta", "cyan"]
+        assets_dir = os.path.join("assets", "bubbles")
+        diameter = BUBBLE_RADIUS * 2
+        preview_diameter = int(diameter * 0.7)
+        self.bubble_images = {}
+        self.bubble_preview_images = {}
+        for idx, rgb in enumerate(BUBBLE_COLORS):
+            name = color_names[idx] if idx < len(color_names) else f"color_{idx}"
+            path = os.path.join(assets_dir, f"{name}.png")
+            try:
+                img = pygame.image.load(path).convert_alpha()
+                img = pygame.transform.smoothscale(img, (diameter, diameter))
+            except Exception:
+                img = self._create_circle_surface(diameter, rgb)
+            try:
+                prev = pygame.image.load(path).convert_alpha()
+                prev = pygame.transform.smoothscale(prev, (preview_diameter, preview_diameter))
+            except Exception:
+                prev = self._create_circle_surface(preview_diameter, rgb)
+            self.bubble_images[rgb] = img
+            self.bubble_preview_images[rgb] = prev
+
+    def _ensure_shooter_ready(self, player_num: int):
+        """Ensure the given player's shooter has a current and next bubble ready."""
+        shooter = self.shooter_one if player_num == 1 else self.shooter_two
+        # If current is missing, promote next or generate new
+        if not shooter.get('current_bubble'):
+            if shooter.get('next_bubble'):
+                shooter['current_bubble'] = shooter['next_bubble']
+                shooter['current_bubble'].x = shooter['x']
+                shooter['current_bubble'].y = shooter['y']
+                # Generate new next
+                next_color = random.choice(BUBBLE_COLORS)
+                nx = shooter['x'] + (BUBBLE_RADIUS * 2.5 if player_num == 1 else -BUBBLE_RADIUS * 2.5)
+                shooter['next_bubble'] = Bubble(nx, shooter['y'], next_color)
+            else:
+                # Generate both current and next
+                color = random.choice(BUBBLE_COLORS)
+                shooter['current_bubble'] = Bubble(shooter['x'], shooter['y'], color)
+                next_color = random.choice(BUBBLE_COLORS)
+                nx = shooter['x'] + (BUBBLE_RADIUS * 2.5 if player_num == 1 else -BUBBLE_RADIUS * 2.5)
+                shooter['next_bubble'] = Bubble(nx, shooter['y'], next_color)
+
     def update_shooters(self):
         # Update current bubbles for both shooters
         color = random.choice(BUBBLE_COLORS)
@@ -225,13 +325,9 @@ class Game:
         )
 
     def shoot(self, angle: float, force_player=None):
-        # Only shoot if there's no moving bubble for the relevant player
+        # Only shoot if called explicitly for a player; moving-bubble gating handled by caller
         if force_player is not None:
             shooter = self.shooter_one if force_player == 1 else self.shooter_two
-            
-            # Check if there's already a moving bubble for this player
-            if any(b.is_moving and b.shot_by_player == force_player for b in self.bubbles):
-                return  # Don't shoot if there's already a moving bubble
             
             if shooter['current_bubble']:
                 shooter['current_bubble'].is_moving = True
@@ -239,6 +335,10 @@ class Game:
                 shooter['current_bubble'].velocity_y = math.sin(math.radians(angle)) * SHOOT_SPEED
                 shooter['current_bubble'].shot_by_player = force_player  # Track which player shot this bubble
                 self.bubbles.append(shooter['current_bubble'])
+                
+                # Play shoot sound effect
+                if self.shoot_sound:
+                    self.shoot_sound.play()
                 if force_player == 1:
                     # For human player, move next bubble to current and generate new next
                     if shooter['next_bubble']:
@@ -270,7 +370,8 @@ class Game:
                     else:
                         color = random.choice(BUBBLE_COLORS)
                         shooter['current_bubble'] = Bubble(shooter['x'], shooter['y'], color)
-            return
+                return True
+            return False
         # Legacy turn-based fallback
         if not any(b.is_moving for b in self.bubbles):
             shooter = self.shooter_one if self.current_player == 1 else self.shooter_two
@@ -280,6 +381,10 @@ class Game:
                 shooter['current_bubble'].velocity_y = math.sin(math.radians(angle)) * SHOOT_SPEED
                 shooter['current_bubble'].shot_by_player = self.current_player  # Track which player shot this bubble
                 self.bubbles.append(shooter['current_bubble'])
+                
+                # Play shoot sound effect
+                if self.shoot_sound:
+                    self.shoot_sound.play()
                 # Move next bubble to current and generate new next
                 if shooter['next_bubble']:
                     shooter['current_bubble'] = shooter['next_bubble']
@@ -319,10 +424,13 @@ class Game:
                 angle = max(-90, min(90, angle))
                 shooter['angle'] = angle
             elif event.type == pygame.MOUSEBUTTONDOWN and not self.game_over:
-                # Shoot if shooter_one has a bubble (the shoot method will check for moving bubbles)
-                if self.shooter_one['current_bubble']:
-                    shooter = self.shooter_one
-                    self.shoot(shooter['angle'], force_player=1)
+                # Fire on left button down only
+                if getattr(event, 'button', 1) == 1:
+                    print("Mouse click received")
+                    self._ensure_shooter_ready(1)
+                    if self.shooter_one.get('current_bubble') is not None:
+                        shooter = self.shooter_one
+                        self.shoot(shooter['angle'], force_player=1)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_d:  # Press 'D' to toggle debug mode
                     global DEBUG_AI
@@ -400,8 +508,11 @@ class Game:
                     self.screen.blit(error_text, (int(pred_x) + 20, int(pred_y) - 10))
 
     def draw(self):
-        # Clear the screen
-        self.screen.fill((0, 0, 0))
+        # Background
+        if self.background_image is not None:
+            self.screen.blit(self.background_image, (0, 0))
+        else:
+            self.screen.fill((0, 0, 0))
         
         # Calculate current center line position
         current_center_x = SCREEN_WIDTH // 2 + self.center_line_offset
@@ -528,20 +639,29 @@ class Game:
             
             # Draw current bubble
             if shooter['current_bubble']:
+                # Supply image provider to Bubble for asset lookup
+                def _provider(rgb):
+                    return self.bubble_images.get(rgb)
+                Bubble._image_provider = _provider
                 shooter['current_bubble'].draw(self.screen)
             
-            # Draw next bubble preview (smaller and semi-transparent)
+            # Draw next bubble preview (smaller)
             if shooter['next_bubble']:
-                # Create a smaller, semi-transparent version of the next bubble
-                preview_radius = int(BUBBLE_RADIUS * 0.7)
-                preview_surface = pygame.Surface((preview_radius * 2, preview_radius * 2), pygame.SRCALPHA)
-                pygame.draw.circle(preview_surface, (*shooter['next_bubble'].color, 180), 
-                                 (preview_radius, preview_radius), preview_radius)
-                pygame.draw.circle(preview_surface, (255, 255, 255, 180), 
-                                 (preview_radius, preview_radius), preview_radius, 2)
-                self.screen.blit(preview_surface, 
-                               (shooter['next_bubble'].x - preview_radius, 
-                                shooter['next_bubble'].y - preview_radius))
+                prev_img = self.bubble_preview_images.get(shooter['next_bubble'].color)
+                if prev_img is not None:
+                    rect = prev_img.get_rect(center=(int(shooter['next_bubble'].x), int(shooter['next_bubble'].y)))
+                    self.screen.blit(prev_img, rect)
+                else:
+                    # Fallback vector
+                    preview_radius = int(BUBBLE_RADIUS * 0.7)
+                    preview_surface = pygame.Surface((preview_radius * 2, preview_radius * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(preview_surface, (*shooter['next_bubble'].color, 180), 
+                                     (preview_radius, preview_radius), preview_radius)
+                    pygame.draw.circle(preview_surface, (255, 255, 255, 180), 
+                                     (preview_radius, preview_radius), preview_radius, 2)
+                    self.screen.blit(preview_surface, 
+                                   (shooter['next_bubble'].x - preview_radius, 
+                                    shooter['next_bubble'].y - preview_radius))
             
             # Draw angle indicator (current angle)
             end_x = shooter['x'] + math.cos(math.radians(shooter['angle'])) * 50
@@ -550,22 +670,24 @@ class Game:
                            (shooter['x'], shooter['y']), 
                            (end_x, end_y), 3)  # Thicker line for current angle
         
-        # Draw scores
-        font = pygame.font.Font(None, 36)
-        # Left player (Player 1)
-        left_score = font.render(f"Player 1: {self.score_player_one}", True, PLAYER_ONE_COLOR)
-        self.screen.blit(left_score, (10, 10))
-        # Right player (Player 2)
-        right_score = font.render(f"Player 2: {self.score_player_two}", True, PLAYER_TWO_COLOR)
-        self.screen.blit(right_score, (SCREEN_WIDTH - right_score.get_width() - 10, 10))
+        # Draw scores (styled for dark background)
+        score_font = pygame.font.Font(None, 60)
+        # Colors
+        score_fill = (230, 230, 240)
+        score_shadow = (20, 20, 30)
+        # Player 1
+        p1_text = score_font.render(f"{self.score_player_one}", True, score_fill)
+        p1_shadow = score_font.render(f"{self.score_player_one}", True, score_shadow)
+        self.screen.blit(p1_shadow, (12, 12))
+        self.screen.blit(p1_text, (10, 10))
+        # Player 2
+        p2_text = score_font.render(f"{self.score_player_two}", True, score_fill)
+        p2_shadow = score_font.render(f"{self.score_player_two}", True, score_shadow)
+        x = SCREEN_WIDTH - p2_text.get_width() - 10
+        self.screen.blit(p2_shadow, (x + 2, 12))
+        self.screen.blit(p2_text, (x, 10))
         
-        # Draw current player indicator
-        current_player_text = font.render(f"Current Player: {self.current_player}", True, (255, 255, 255))
-        self.screen.blit(current_player_text, (SCREEN_WIDTH // 2 - 100, 10))
-        
-        # Draw center line offset indicator
-        offset_text = font.render(f"Center Offset: {self.center_line_offset}", True, (255, 255, 0))
-        self.screen.blit(offset_text, (SCREEN_WIDTH // 2 - 100, 50))
+        # Removed on-screen current player and center offset indicators per request
         
         # DEBUG: Draw AI debug info panel
         if DEBUG_AI:
@@ -578,6 +700,72 @@ class Game:
             self.screen.blit(text, text_rect)
         
         pygame.display.flip()
+
+    def show_game_over_screen(self):
+        font = pygame.font.Font(None, 90)
+        score_font = pygame.font.Font(None, 70)
+        button_font = pygame.font.Font(None, 50)
+
+        # Determine winner and color
+        winner = "It's a Draw!"
+        color = (255, 215, 0)  # Gold for draw
+        if self.score_player_one > self.score_player_two:
+            winner = "Player 1 Wins!"
+            color = (0, 200, 0)  # Green
+        elif self.score_player_two > self.score_player_one:
+            winner = "Player 2 Wins!"
+            color = (0, 100, 255)  # Blue
+
+        # Dark overlay background
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.set_alpha(180)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+
+        # Winner text
+        text = font.render(winner, True, color)
+        self.screen.blit(text, text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 120)))
+
+        # Final score text (Player1 - Player2)
+        score_text = score_font.render(f"{self.score_player_one} - {self.score_player_two}", True, (255, 255, 255))
+        self.screen.blit(score_text, score_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40)))
+
+        # Button rectangles
+        restart_rect = pygame.Rect(SCREEN_WIDTH // 2 - 200, SCREEN_HEIGHT // 2 + 60, 180, 60)
+        quit_rect = pygame.Rect(SCREEN_WIDTH // 2 + 20, SCREEN_HEIGHT // 2 + 60, 180, 60)
+
+        running_modal = True
+        while running_modal:
+            # Draw buttons (with hover effect)
+            mouse_pos = pygame.mouse.get_pos()
+
+            for rect, label in [(restart_rect, "Restart"), (quit_rect, "Quit")]:
+                if rect.collidepoint(mouse_pos):
+                    pygame.draw.rect(self.screen, (255, 255, 255), rect, border_radius=12)
+                    pygame.draw.rect(self.screen, (200, 200, 200), rect, 3, border_radius=12)
+                    text_surf = button_font.render(label, True, (0, 0, 0))
+                else:
+                    pygame.draw.rect(self.screen, (50, 50, 50), rect, border_radius=12)
+                    pygame.draw.rect(self.screen, (200, 200, 200), rect, 3, border_radius=12)
+                    text_surf = button_font.render(label, True, (255, 255, 255))
+                self.screen.blit(text_surf, text_surf.get_rect(center=rect.center))
+
+            pygame.display.update()
+
+            # Event handling
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return "back_to_menu"
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return "back_to_menu"
+                    if event.key == pygame.K_r:
+                        return "restart"
+                elif event.type == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 1) == 1:
+                    if restart_rect.collidepoint(event.pos):
+                        return "restart"
+                    elif quit_rect.collidepoint(event.pos):
+                        return "back_to_menu"
 
     def check_collision(self, moving_bubble: Bubble) -> Optional[Tuple[int, int, int]]:
         # Check collision with walls first
@@ -723,6 +911,16 @@ class Game:
                 if (0, col, player_num) in self.grid:
                     to_check.append((0, col, player_num))
                     connected_to_top.add((0, col, player_num))
+
+            # NEW: Also treat bubbles adjacent to the middle vertical line (col == 0)
+            # as anchored seeds, but only for rows that actually touch the center
+            # in the honeycomb layout (even rows).
+            for row in range(GRID_ROWS):
+                if row % 2 == 0:
+                    key = (row, 0, player_num)
+                    if key in self.grid and key not in connected_to_top:
+                        to_check.append(key)
+                        connected_to_top.add(key)
         
         # Breadth-first search to find all connected bubbles
         while to_check:
@@ -783,6 +981,10 @@ class Game:
     def update(self):
         if self.game_over:
             return
+
+        # Edge-detection fallback removed to avoid double fire; rely on MOUSEBUTTONDOWN events only
+
+        # Human shooting is handled immediately on click (no queue)
 
         # AI (right side) acts in real time
         if not any(b.is_moving and b.shot_by_player == 2 for b in self.bubbles):
@@ -964,7 +1166,9 @@ class Game:
                 
                 self.shooter_two['angle'] = ai_angle
                 self.shoot(ai_angle, force_player=2)  # Ensure only right shooter acts
-                self.ai_action_cooldown = int(1.5 * 60)  # 1.5 seconds at 60 FPS
+                # Random delay between 0.8 and 1.2 seconds
+                delay_seconds = random.uniform(0.8, 1.2)
+                self.ai_action_cooldown = int(delay_seconds * 60)  # Convert to frames at 60 FPS
         if self.ai_action_cooldown > 0:
             self.ai_action_cooldown -= 1
 
@@ -1054,6 +1258,22 @@ class Game:
             bubble.velocity_y = 5  # Initial falling speed
             bubble.velocity_x = 0
         self.falling_bubbles.extend(bubbles_to_fall)
+
+    def _reset_for_new_game(self):
+        # Reset dynamic game state while retaining loaded assets and AI
+        self.bubbles = []
+        self.grid = {}
+        self.grid_to_screen = {}
+        self.score_player_one = 0
+        self.score_player_two = 0
+        self.center_line_offset = 0
+        self.target_center_line_offset = 0
+        self.falling_bubbles = []
+        self.game_over = False
+        # Rebuild grids and starting bubbles/shooters
+        self.initialize_grid()
+        self.initialize_bubbles()
+        self.initialize_shooters()
 
     def update_center_line_offset(self, offset_change: int):
         """Update the target center line offset for smooth animation"""
@@ -1934,6 +2154,13 @@ class Game:
             self.update()
             self.draw()
             self.clock.tick(60)
+            # If game over, present modal and handle choice
+            if self.game_over:
+                choice = self.show_game_over_screen()
+                if choice == "restart":
+                    self._reset_for_new_game()
+                else:
+                    running = False
 
 if __name__ == "__main__":
     game = Game()
