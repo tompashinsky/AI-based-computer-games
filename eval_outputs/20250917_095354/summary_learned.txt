@@ -1,0 +1,3 @@
+Total steps: 1000
+Good actions: 599
+Good/Overall ratio: 0.5990
