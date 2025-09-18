@@ -2,6 +2,7 @@ import pygame
 import sys
 from tic_tac_toe import run_tic_tac_toe
 from head_soccer_nn2 import run_head_soccer
+from bubbles import Game
 
 pygame.init()
 pygame.mixer.init()
@@ -124,6 +125,8 @@ def main_menu():
             return "tic_tac_toe"
         elif button_2.collidepoint((mx, my)) and is_clicked:
             return "head_soccer"
+        elif button_3.collidepoint((mx, my)) and is_clicked:
+            return "bubbles"
 
         # --- Buttons (with hover effect) ---
         for button, label, cx, cy in [
@@ -165,6 +168,8 @@ def game_controller():
                 current_screen = "tic_tac_toe"
             elif result == "head_soccer":
                 current_screen = "head_soccer"
+            elif result == "bubbles":
+                current_screen = "bubbles"
 
         elif current_screen == "tic_tac_toe":
             result = run_tic_tac_toe()
@@ -174,6 +179,13 @@ def game_controller():
         elif current_screen == "head_soccer":
             result = run_head_soccer()
             if result == "back_to_menu":
+                current_screen = "menu"
+
+        elif current_screen == "bubbles":
+            game = Game()
+            result = game.run()
+            if result == "back_to_menu":
+                pygame.display.set_mode((800, 850))
                 current_screen = "menu"
 
 

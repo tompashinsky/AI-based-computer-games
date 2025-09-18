@@ -2155,8 +2155,8 @@ class Game:
                 choice = self.show_game_over_screen()
                 if choice == "restart":
                     self._reset_for_new_game()
-                else:
-                    running = False
+                elif choice == "back_to_menu":
+                    return "back_to_menu"
 
 if __name__ == "__main__":
     game = Game()
