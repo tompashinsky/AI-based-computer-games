@@ -93,6 +93,7 @@ class Bubble:
         self.bounce_count = 0  # Track number of wall bounces
         self.shot_by_player = None  # Track which player shot this bubble
         self.move_frames = 0  # Frames moved while is_moving
+        self.is_falling = False  # True when bubble is in falling animation
 
     def draw(self, screen: pygame.Surface):
         try:
@@ -153,6 +154,17 @@ class Game:
         self.initialize_shooters()
         # Load bubble assets
         self._load_bubble_assets()
+        # Back-to-menu button (bottom-left)
+        try:
+            self.back_button_rect = pygame.Rect(10, SCREEN_HEIGHT - 50, 44, 40)
+        except Exception:
+            self.back_button_rect = None
+        self.back_to_menu = False
+        # Grid change tracking for performance
+        self.grid_dirty = True
+        self.grid_version = 0
+        # Cache for AI target computations keyed by grid_version
+        self._ai_targets_cache = {"version": -1, "targets": []}
         # Load background
         try:
             bg_path = os.path.join("assets", "backgrounds", "Blue_Nebula.png")
@@ -412,7 +424,8 @@ class Game:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return False
+                pygame.quit()
+                sys.exit()
             elif event.type == pygame.MOUSEMOTION and not self.game_over:
                 # Always update left shooter angle based on mouse position
                 mouse_x, mouse_y = event.pos
@@ -426,7 +439,13 @@ class Game:
             elif event.type == pygame.MOUSEBUTTONDOWN and not self.game_over:
                 # Fire on left button down only
                 if getattr(event, 'button', 1) == 1:
-                    print("Mouse click received")
+                    # Back button click takes precedence
+                    try:
+                        if getattr(self, 'back_button_rect', None) is not None and self.back_button_rect.collidepoint(event.pos):
+                            self.back_to_menu = True
+                            return True
+                    except Exception:
+                        pass
                     self._ensure_shooter_ready(1)
                     if self.shooter_one.get('current_bubble') is not None:
                         shooter = self.shooter_one
@@ -695,6 +714,35 @@ class Game:
         
         # Removed on-screen "Game Over!" message per request
         
+        # Draw back-to-menu arrow button (bottom-left)
+        try:
+            if getattr(self, 'back_button_rect', None) is not None:
+                rect = self.back_button_rect
+                mouse_pos = pygame.mouse.get_pos()
+                hovered = rect.collidepoint(mouse_pos)
+                # Background
+                bg_color = (0, 0, 0, 160) if not hovered else (40, 40, 40, 200)
+                surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+                pygame.draw.rect(surf, bg_color, pygame.Rect(0, 0, rect.width, rect.height), border_radius=8)
+                # Arrow (left-pointing)
+                arrow_color = (255, 255, 255) if not hovered else (255, 215, 0)
+                left = 8
+                right = rect.width - 8
+                top = 8
+                bottom = rect.height - 8
+                mid_y = rect.height // 2
+                # Triangle head
+                tri = [(left, mid_y), (left + 12, top), (left + 12, bottom)]
+                # Tail rectangle
+                tail_rect = pygame.Rect(left + 12, mid_y - 6, right - (left + 12), 12)
+                pygame.draw.polygon(surf, arrow_color, tri)
+                pygame.draw.rect(surf, arrow_color, tail_rect, border_radius=4)
+                # Border
+                pygame.draw.rect(surf, (200, 200, 200), pygame.Rect(0, 0, rect.width, rect.height), 2, border_radius=8)
+                self.screen.blit(surf, (rect.x, rect.y))
+        except Exception:
+            pass
+
         pygame.display.flip()
 
     def show_game_over_screen(self):
@@ -751,7 +799,8 @@ class Game:
             # Event handling
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    return "back_to_menu"
+                    pygame.quit()
+                    sys.exit()
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return "back_to_menu"
@@ -990,7 +1039,12 @@ class Game:
                 
                 # NEW: Bubble-target action system using hybrid masking
                 # Use empty-cell targets: valid placement + direct LOS (no bounce by default)
-                reachable_targets = self.get_valid_targets_constrained(2)
+                # Cache reachable targets per grid version
+                if self._ai_targets_cache["version"] != self.grid_version:
+                    reachable_targets = self.get_valid_targets_constrained(2)
+                    self._ai_targets_cache = {"version": self.grid_version, "targets": list(reachable_targets)}
+                else:
+                    reachable_targets = list(self._ai_targets_cache["targets"])
                 # Store for debug rendering parity with selection
                 self.last_reachable_targets = list(reachable_targets)
                 
@@ -1010,7 +1064,7 @@ class Game:
                 except Exception:
                     self.last_chosen_action_idx = None
                 
-                # DEBUG: Get Q-values for analysis
+                # DEBUG: Get Q-values for analysis (skip heavy work when debug off)
                 if DEBUG_AI:
                     with torch.no_grad():
                         state_tensor = torch.FloatTensor(dqn_state).unsqueeze(0).to('cpu')
@@ -1186,28 +1240,37 @@ class Game:
             for bubble in self.bubbles:
                 if bubble.grid_pos and not bubble.is_moving:
                     bubble.x, bubble.y = self.grid_to_screen[bubble.grid_pos]
+            # Grid positions changed; no content change — do not mark dirty
 
-        # Animate falling bubbles non-blocking
+        # Animate falling bubbles non-blocking (do not block other updates)
         if self.falling_bubbles:
             still_falling = []
+            removed = []
             for bubble in self.falling_bubbles:
+                # Move bubble downward with gravity
+                bubble.y += bubble.velocity_y
+                bubble.velocity_y += 0.5
                 if bubble.y < SCREEN_HEIGHT + BUBBLE_RADIUS:
-                    bubble.y += bubble.velocity_y
-                    bubble.velocity_y += 0.5  # Accelerate falling
                     still_falling.append(bubble)
+                else:
+                    removed.append(bubble)
             self.falling_bubbles = still_falling
-            # Remove fallen bubbles when done
-            if not self.falling_bubbles:
-                self.remove_bubbles([b for b in self.bubbles if b.is_moving and b.y >= SCREEN_HEIGHT + BUBBLE_RADIUS])
-            return  # Skip the rest of the update until animation is complete
+            # Remove bubbles that finished falling from render list
+            if removed:
+                self.bubbles = [b for b in self.bubbles if b not in removed]
 
-        # Check for isolated bubbles first
-        isolated = self.check_isolated_bubbles()
+        # Check for isolated bubbles and start their falling animation without blocking
+        # Only recompute isolation when grid changed
+        isolated = []
+        if self.grid_dirty:
+            isolated = self.check_isolated_bubbles()
         if isolated:
             self.animate_falling_bubbles(isolated)
-            return  # Skip the rest of the update until animation is complete
 
         for bubble in self.bubbles:
+            # Skip falling bubbles in normal physics/collision handling
+            if getattr(bubble, 'is_falling', False):
+                continue
             if bubble.is_moving and not bubble.snapped:
                 bubble.update()
                 if bubble.check_wall_collision():
@@ -1230,6 +1293,9 @@ class Game:
                 if collision:
                     bubble.snap_to_grid(collision, self.grid_to_screen)
                     self.grid[collision] = bubble
+                    # Mark grid changed
+                    self.grid_dirty = True
+                    self.grid_version += 1
                     
                     # Check for matches
                     matches = self.check_matches(bubble)
@@ -1248,12 +1314,23 @@ class Game:
             self.game_over = True
 
     def animate_falling_bubbles(self, bubbles_to_fall: List[Bubble]):
-        # Mark bubbles as falling and add to self.falling_bubbles
+        # Mark bubbles as falling, remove from grid immediately, and add to falling list
         for bubble in bubbles_to_fall:
             bubble.is_moving = True
-            bubble.velocity_y = 5  # Initial falling speed
+            bubble.is_falling = True
             bubble.velocity_x = 0
-        self.falling_bubbles.extend(bubbles_to_fall)
+            bubble.velocity_y = 5  # Initial falling speed
+            if bubble.grid_pos and bubble.grid_pos in self.grid:
+                try:
+                    del self.grid[bubble.grid_pos]
+                except Exception:
+                    pass
+            bubble.grid_pos = None
+            if bubble not in self.falling_bubbles:
+                self.falling_bubbles.append(bubble)
+        # Grid changed due to removals
+        self.grid_dirty = True
+        self.grid_version += 1
 
     def _reset_for_new_game(self):
         # Reset dynamic game state while retaining loaded assets and AI
@@ -2150,6 +2227,9 @@ class Game:
             self.update()
             self.draw()
             self.clock.tick(60)
+            # Back button requested transition
+            if getattr(self, 'back_to_menu', False):
+                return "back_to_menu"
             # If game over, present modal and handle choice
             if self.game_over:
                 choice = self.show_game_over_screen()
