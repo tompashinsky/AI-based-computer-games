@@ -20,4 +20,10 @@ Clicking the "Head Soccer" button leads to a screen with a short opening message
 ### 4. Bubbles Game 🔴🔵🟡
 Clicking the "Head Soccer" button leads immediately to the game itself. The game is a unique variation of the classic game: unlike the usual version with a single player, this game is played between two players – the user on the left and the AI ​​opponent on the right. The goal of the players is to burst groups of three or more bubbles of the same color. When a player succeeds in bursting bubbles, the entire game board moves towards the opponent, which brings him closer to the limit of loss. The game ends when one of the players' bubble board crosses his border, and at the end of the game a panel appears announcing the winner, as well as two buttons: "Restart" and "Quit".
 
+--------------
+
+## How to get started?
+
+After importing the files, run "home_screen.py" and the main screen will show up.
+
 
